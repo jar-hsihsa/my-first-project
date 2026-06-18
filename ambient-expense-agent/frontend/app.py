@@ -38,18 +38,21 @@ if st.button("Submit Expense"):
             
             final_output = None
             for event in events:
-                # Process text content
+                # Process text content and function calls
                 content = event.get("content")
                 if content and "parts" in content:
                     for part in content["parts"]:
                         if "text" in part:
                             st.markdown(part["text"])
+                        if "function_call" in part:
+                            fn_call = part["function_call"]
+                            if fn_call.get("name") == "adk_request_input":
+                                args = fn_call.get("args", {})
+                                message = args.get("message", "Agent paused for human input.")
+                                interrupt_id = args.get("interruptId", "Unknown")
+                                st.warning(message)
+                                st.info(f"Agent paused and requires human input. Interrupt ID: {interrupt_id}")
                 
-                # Check for RequestInput which pauses the workflow
-                if event.get("type") == 'RequestInput':
-                    st.warning(event.get("message", "Agent paused for input."))
-                    st.info(f"Agent paused and requires human input. Interrupt ID: {event.get('interrupt_id')}")
-                    
                 # Store the latest raw JSON output
                 if "output" in event:
                     final_output = event["output"]
