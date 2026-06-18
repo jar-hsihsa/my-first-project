@@ -36,6 +36,7 @@ if st.button("Submit Expense"):
             
             st.subheader("Agent Output")
             
+            final_output = None
             for event in events:
                 # Process text content
                 content = event.get("content")
@@ -49,9 +50,13 @@ if st.button("Submit Expense"):
                     st.warning(event.get("message", "Agent paused for input."))
                     st.info(f"Agent paused and requires human input. Interrupt ID: {event.get('interrupt_id')}")
                     
-                # Process raw JSON output
+                # Store the latest raw JSON output
                 if "output" in event:
-                    st.json(event["output"])
+                    final_output = event["output"]
+            
+            if final_output:
+                st.subheader("Final State Output")
+                st.json(final_output)
                     
     except json.JSONDecodeError:
         st.error("Invalid JSON input. Please correct the JSON and try again.")
