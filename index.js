@@ -21,6 +21,26 @@ const printDivider = () => {
   console.log(pc.gray('─'.repeat(process.stdout.columns || 80)));
 };
 
+/**
+ * Validates and retrieves the Gemini API key from environment variables
+ * @throws {Error} If API key is not set or invalid
+ * @returns {string} The validated API key
+ */
+function getGeminiApiKey() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  
+  if (!apiKey) {
+    return null;
+  }
+  
+  // Validate API key format (basic check)
+  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+    throw new Error('Invalid GEMINI_API_KEY: API key must be a non-empty string');
+  }
+  
+  return apiKey.trim();
+}
+
 async function main() {
   console.log('\n' + pc.bold(pc.bgCyan(pc.black(' ⚡ GOOGLE AI NEWS CLI '))) + ' ' + pc.cyan('Latest Updates Simplified') + '\n');
 
@@ -48,7 +68,13 @@ async function main() {
     process.exit(0);
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  let apiKey;
+  try {
+    apiKey = getGeminiApiKey();
+  } catch (error) {
+    spinner.fail(pc.red(`Configuration error: ${error.message}`));
+    process.exit(1);
+  }
 
   if (apiKey) {
     spinner.text = 'Simplifying news into lucid language with Gemini...';
@@ -122,15 +148,15 @@ Ensure the output matches the JSON schema exactly. Return exactly ${items.length
     
     // Help box for setting API key
     console.log();
-    console.log(pc.yellow('╭──────────────────────────────────────────────────────────────────╮'));
+    console.log(pc.yellow('╭───────────────────────────────────────────────────────────────────────────────────────╮'));
     console.log(pc.yellow('│ ') + pc.bold('💡 Enable AI-powered Lucid Summaries') + '                             ' + pc.yellow('│'));
-    console.log(pc.yellow('├──────────────────────────────────────────────────────────────────┤'));
+    console.log(pc.yellow('├───────────────────────────────────────────────────────────────────────────────────────┤'));
     console.log(pc.yellow('│ ') + pc.white('This tool can use Gemini to simplify these articles for you.     ') + pc.yellow('│'));
     console.log(pc.yellow('│ ') + pc.white('To enable this:') + '                                                  ' + pc.yellow('│'));
     console.log(pc.yellow('│ ') + pc.white('1. Get a free Gemini API Key from: ') + pc.cyan('https://aistudio.google.com/') + pc.yellow('  │'));
     console.log(pc.yellow('│ ') + pc.white('2. Paste your key in ') + pc.bold('.env') + pc.white(' file inside this directory:') + '            ' + pc.yellow('│'));
     console.log(pc.yellow('│    ') + pc.bold('GEMINI_API_KEY=your_key_here') + '                                  ' + pc.yellow('│'));
-    console.log(pc.yellow('╰──────────────────────────────────────────────────────────────────╯'));
+    console.log(pc.yellow('╰───────────────────────────────────────────────────────────────────────────────────────╯'));
     console.log();
   }
 }
