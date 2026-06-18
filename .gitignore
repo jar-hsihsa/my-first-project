@@ -1,0 +1,69 @@
+# ========================
+# Embedded / Nested repos
+# ========================
+git_test/
+
+# ========================
+# Secrets & Credentials
+# ========================
+.secrets
+.secrets.*
+*.secret
+*.key
+*.pem
+
+# ========================
+# Environment Variables
+# ========================
+.env
+.env.*
+!.env.example
+
+# ========================
+# Node
+# ========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.next/
+.nuxt/
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+*.pyd
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+dist/
+*.dist-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ========================
+# IDE / OS
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# Logs
+# ========================
+*.log
+logs/
