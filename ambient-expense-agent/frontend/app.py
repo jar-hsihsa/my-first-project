@@ -1,7 +1,7 @@
 import streamlit as st
 import json
 import asyncio
-from expense_agent.agent import app as adk_app
+from expense_agent.agent_runtime_app import agent_runtime
 
 st.set_page_config(page_title="Expense Agent Frontend", layout="centered")
 
@@ -18,10 +18,10 @@ default_json = """{
 
 json_input = st.text_area("Expense JSON", value=default_json, height=200)
 
-async def run_agent(data):
+def run_agent(data):
     events = []
-    # Using adk_app.stream
-    async for event in adk_app.stream(input=data):
+    # Using agent_runtime.stream which is a synchronous generator
+    for event in agent_runtime.stream(input=data):
         events.append(event)
     return events
 
@@ -30,8 +30,8 @@ if st.button("Submit Expense"):
         data = json.loads(json_input)
         
         with st.spinner("Processing expense..."):
-            # Run the asynchronous agent loop
-            events = asyncio.run(run_agent(data))
+            # Run the synchronous agent loop
+            events = run_agent(data)
             
             st.subheader("Agent Output")
             
