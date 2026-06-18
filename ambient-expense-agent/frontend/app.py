@@ -20,8 +20,9 @@ json_input = st.text_area("Expense JSON", value=default_json, height=200)
 
 def run_agent(data):
     events = []
-    # Using agent_runtime.streaming_agent_run_with_events
-    for event in agent_runtime.streaming_agent_run_with_events(input=data):
+    message_dict = {"parts": [{"text": json.dumps(data)}], "role": "user"}
+    # Using agent_runtime.stream_query which accepts message and user_id
+    for event in agent_runtime.stream_query(message=message_dict, user_id="streamlit_user"):
         events.append(event)
     return events
 
@@ -36,17 +37,21 @@ if st.button("Submit Expense"):
             st.subheader("Agent Output")
             
             for event in events:
-                if getattr(event, "content", None) and event.content:
-                    for part in event.content.parts:
-                        st.markdown(part.text)
+                # Process text content
+                content = event.get("content")
+                if content and "parts" in content:
+                    for part in content["parts"]:
+                        if "text" in part:
+                            st.markdown(part["text"])
                 
                 # Check for RequestInput which pauses the workflow
-                if type(event).__name__ == 'RequestInput':
-                    st.warning(event.message)
-                    st.info(f"Agent paused and requires human input. Interrupt ID: {event.interrupt_id}")
+                if event.get("type") == 'RequestInput':
+                    st.warning(event.get("message", "Agent paused for input."))
+                    st.info(f"Agent paused and requires human input. Interrupt ID: {event.get('interrupt_id')}")
                     
-                if getattr(event, "output", None):
-                    st.json(event.output)
+                # Process raw JSON output
+                if "output" in event:
+                    st.json(event["output"])
                     
     except json.JSONDecodeError:
         st.error("Invalid JSON input. Please correct the JSON and try again.")
