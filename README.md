@@ -140,6 +140,11 @@ This installs all Python packages using `uv`. Takes ~1 minute on first run.
 agents-cli playground
 ```
 
+> **⚠️ Windows Users Note**: If the command above fails with "Got unexpected extra arguments", run the underlying command directly in your terminal without the problematic wildcard:
+> ```bash
+> uv run adk web . --host 127.0.0.1 --port 8080
+> ```
+
 The agent will start and open a local web UI in your browser at:
 
 ```
