@@ -11,6 +11,8 @@ git_test/
 *.secret
 *.key
 *.pem
+.env.local
+.env.*.local
 
 # ========================
 # Environment Variables
@@ -67,3 +69,10 @@ desktop.ini
 # ========================
 *.log
 logs/
+
+# ========================
+# Security
+# ========================
+# Detect-secrets cache
+.detect-secrets/
+.secrets.baseline
