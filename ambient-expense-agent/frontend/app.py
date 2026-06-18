@@ -8,7 +8,8 @@ import uuid
 st.set_page_config(page_title="Expense Agent Frontend", layout="centered")
 
 if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+    session = agent_runtime.create_session(user_id="streamlit_user")
+    st.session_state.session_id = session["id"]
 if "waiting_for_input" not in st.session_state:
     st.session_state.waiting_for_input = False
 if "interrupt_message" not in st.session_state:
@@ -70,7 +71,8 @@ def process_events(events):
 if st.button("Submit Expense"):
     try:
         # Reset state on new submission
-        st.session_state.session_id = str(uuid.uuid4())
+        session = agent_runtime.create_session(user_id="streamlit_user")
+        st.session_state.session_id = session["id"]
         st.session_state.waiting_for_input = False
         st.session_state.final_output = None
         
