@@ -20,8 +20,8 @@ json_input = st.text_area("Expense JSON", value=default_json, height=200)
 
 def run_agent(data):
     events = []
-    # Using agent_runtime.stream which is a synchronous generator
-    for event in agent_runtime.stream(input=data):
+    # Using agent_runtime.streaming_agent_run_with_events
+    for event in agent_runtime.streaming_agent_run_with_events(input=data):
         events.append(event)
     return events
 

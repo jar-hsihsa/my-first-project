@@ -43,7 +43,7 @@ from expense_agent.app_utils.typing import Feedback
 class AgentEngineApp(AdkApp):
     def set_up(self) -> None:
         """Initialize the agent engine app with logging and telemetry."""
-        vertexai.init()
+        vertexai.init(project=os.environ.get("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project"))
         setup_telemetry()
         super().set_up()
         logging.basicConfig(level=logging.INFO)
