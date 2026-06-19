@@ -237,7 +237,29 @@ MODEL_NAME = "gemini-3.1-flash-lite"  # Gemini model used for risk analysis
 
 ---
 
+## ☁️ Deploying to Google Cloud (Optional)
 
+When you're ready to deploy this agent to production rather than running it locally:
+
+1. **Prerequisites**: Ensure you have a Google Cloud Project with an active **Billing Account** linked.
+2. **Authenticate**: Log in and set your project:
+   ```bash
+   gcloud auth login
+   gcloud auth application-default login
+   gcloud config set project <your-gcp-project-id>
+   ```
+3. **Enable APIs**: 
+   ```bash
+   gcloud services enable aiplatform.googleapis.com cloudbuild.googleapis.com
+   ```
+4. **Deploy**:
+   ```bash
+   agents-cli deploy
+   ```
+
+This deploys to **Google Cloud Agent Runtime** and provides a permanent hosted URL for your team. Full Terraform infrastructure is included under `deployment/`.
+
+---
 
 ## 🧪 Running Tests
 
