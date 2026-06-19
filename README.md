@@ -237,18 +237,7 @@ MODEL_NAME = "gemini-3.1-flash-lite"  # Gemini model used for risk analysis
 
 ---
 
-## ☁️ Deploying to Google Cloud (Optional)
 
-When you're ready to go beyond local demos:
-
-```bash
-gcloud config set project <your-gcp-project-id>
-agents-cli deploy
-```
-
-This deploys to **Google Cloud Agent Runtime** and gives you a permanent hosted URL your team can access anytime. Full Terraform infrastructure is already included under `deployment/terraform/`.
-
----
 
 ## 🧪 Running Tests
 
