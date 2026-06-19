@@ -16,6 +16,10 @@ if "interrupt_message" not in st.session_state:
     st.session_state.interrupt_message = ""
 if "final_output" not in st.session_state:
     st.session_state.final_output = None
+if "interrupt_id" not in st.session_state:
+    st.session_state.interrupt_id = None
+if "agent_messages" not in st.session_state:
+    st.session_state.agent_messages = []
 
 st.title("Expense Agent Frontend")
 st.write("Submit your expense report in JSON format below:")
@@ -30,11 +34,10 @@ default_json = """{
 
 json_input = st.text_area("Expense JSON", value=default_json, height=200)
 
-def run_agent(message_text):
+def run_agent(payload_dict):
     events = []
-    message_dict = {"parts": [{"text": message_text}], "role": "user"}
     for event in agent_runtime.stream_query(
-        message=message_dict, 
+        message=payload_dict, 
         user_id="streamlit_user", 
         session_id=st.session_state.session_id
     ):
@@ -42,7 +45,6 @@ def run_agent(message_text):
     return events
 
 def process_events(events):
-    st.subheader("Agent Output")
     final_output = None
     paused = False
     
@@ -51,12 +53,13 @@ def process_events(events):
         if content and "parts" in content:
             for part in content["parts"]:
                 if "text" in part:
-                    st.markdown(part["text"])
+                    st.session_state.agent_messages.append(part["text"])
                 if "function_call" in part:
                     fn_call = part["function_call"]
                     if fn_call.get("name") == "adk_request_input":
                         args = fn_call.get("args", {})
                         st.session_state.interrupt_message = args.get("message", "Agent paused for human input.")
+                        st.session_state.interrupt_id = fn_call.get("id")
                         paused = True
                         
         if "output" in event:
@@ -65,8 +68,6 @@ def process_events(events):
     st.session_state.waiting_for_input = paused
     if not paused and final_output:
         st.session_state.final_output = final_output
-        st.subheader("Final State Output")
-        st.json(final_output)
 
 if st.button("Submit Expense"):
     try:
@@ -75,10 +76,12 @@ if st.button("Submit Expense"):
         st.session_state.session_id = session["id"]
         st.session_state.waiting_for_input = False
         st.session_state.final_output = None
+        st.session_state.agent_messages = []
         
         data = json.loads(json_input)
         with st.spinner("Processing expense..."):
-            events = run_agent(json.dumps(data))
+            message_dict = {"parts": [{"text": json.dumps(data)}], "role": "user"}
+            events = run_agent(message_dict)
             process_events(events)
             
     except json.JSONDecodeError:
@@ -94,16 +97,64 @@ if st.session_state.waiting_for_input:
     with col1:
         if st.button("Approve Expense", type="primary"):
             with st.spinner("Resuming workflow..."):
-                events = run_agent("Approve")
+                payload = {
+                    "role": "tool",
+                    "parts": [{
+                        "function_response": {
+                            "id": st.session_state.interrupt_id,
+                            "name": "adk_request_input",
+                            "response": {"output": "Approve"}
+                        }
+                    }]
+                }
+                events = run_agent(payload)
                 process_events(events)
                 st.rerun()
     with col2:
         if st.button("Reject Expense"):
             with st.spinner("Resuming workflow..."):
-                events = run_agent("Reject")
+                payload = {
+                    "role": "tool",
+                    "parts": [{
+                        "function_response": {
+                            "id": st.session_state.interrupt_id,
+                            "name": "adk_request_input",
+                            "response": {"output": "Reject"}
+                        }
+                    }]
+                }
+                events = run_agent(payload)
                 process_events(events)
                 st.rerun()
+
+    st.markdown("---")
+    custom_message = st.text_input("Or enter a custom response:")
+    if st.button("Submit Custom Response"):
+        if custom_message.strip():
+            with st.spinner("Resuming workflow..."):
+                payload = {
+                    "role": "tool",
+                    "parts": [{
+                        "function_response": {
+                            "id": st.session_state.interrupt_id,
+                            "name": "adk_request_input",
+                            "response": {"output": custom_message}
+                        }
+                    }]
+                }
+                events = run_agent(payload)
+                process_events(events)
+                st.rerun()
+        else:
+            st.warning("Please enter a message before submitting.")
+
+if st.session_state.agent_messages:
+    st.subheader("Agent Output")
+    for msg in st.session_state.agent_messages:
+        st.markdown(msg)
 
 # If finished after an interrupt, display the final output that was saved
 if not st.session_state.waiting_for_input and st.session_state.final_output:
     st.success("Workflow completed!")
+    st.subheader("Final State Output")
+    st.json(st.session_state.final_output)
