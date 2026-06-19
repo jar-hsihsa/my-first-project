@@ -59,3 +59,4 @@ Ask the user: Option A (simple single-project) or Option B (full CI/CD pipeline 
 - **Run Python with `uv`**: `uv run python script.py`. Run `agents-cli install` first.
 - **Stop on repeated errors**: If the same error appears 3+ times, fix the root cause instead of retrying.
 - **Terraform conflicts** (Error 409): Use `terraform import` instead of retrying creation.
+- **Git Commits & Pushes**: Never execute `git commit` or `git push` without explicitly asking the user for permission first. You must propose the exact commit message to the user and wait for their approval before proceeding.
