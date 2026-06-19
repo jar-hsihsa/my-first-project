@@ -24,15 +24,7 @@ if "agent_messages" not in st.session_state:
 st.title("Expense Agent Frontend")
 st.write("Submit your expense report in JSON format below:")
 
-default_json = """{
-  "amount": 150.0,
-  "submitter": "alice@example.com",
-  "category": "Meals",
-  "description": "Lunch with client",
-  "date": "2026-06-18"
-}"""
-
-json_input = st.text_area("Expense JSON", value=default_json, height=200)
+json_input = st.text_area("Expense JSON", value="", height=200, placeholder="Paste your expense JSON here...")
 
 def run_agent(payload_dict):
     events = []

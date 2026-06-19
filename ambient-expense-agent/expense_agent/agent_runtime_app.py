@@ -43,14 +43,26 @@ from expense_agent.app_utils.typing import Feedback
 class AgentEngineApp(AdkApp):
     def set_up(self) -> None:
         """Initialize the agent engine app with logging and telemetry."""
-        vertexai.init(project=os.environ.get("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project"))
+        if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() != "false":
+            vertexai.init(project=os.environ.get("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project"))
+        else:
+            try:
+                from google.cloud.aiplatform.utils import resource_manager_utils
+                resource_manager_utils.get_project_id = lambda *args, **kwargs: "dummy-gcp-project"
+            except ImportError:
+                pass
+        
         setup_telemetry()
         super().set_up()
         logging.basicConfig(level=logging.INFO)
-        try:
-            logging_client = google_cloud_logging.Client()
-            self.logger = logging_client.logger(__name__)
-        except Exception:
+        if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() != "false":
+            try:
+                logging_client = google_cloud_logging.Client()
+                self.logger = logging_client.logger(__name__)
+            except Exception:
+                pass
+
+        if not hasattr(self, "logger"):
             class FallbackLogger:
                 def log_struct(self, data, severity="INFO"):
                     logging.info(f"[{severity}] Struct Log: {data}")
