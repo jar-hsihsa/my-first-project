@@ -36,7 +36,7 @@ from expense_agent.config import EXPENSE_THRESHOLD, MODEL_NAME
 load_dotenv()
 
 # Conditional authentication configuration
-use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "True").lower() in ("true", "1")
+use_vertex = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")
 if use_vertex:
     import google.auth
     try:
