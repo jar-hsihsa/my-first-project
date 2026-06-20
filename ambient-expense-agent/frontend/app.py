@@ -1,3 +1,4 @@
+import re
 import streamlit as st
 import json
 import asyncio
@@ -21,10 +22,57 @@ if "interrupt_id" not in st.session_state:
 if "agent_messages" not in st.session_state:
     st.session_state.agent_messages = []
 
-st.title("Expense Agent Frontend")
-st.write("Submit your expense report in JSON format below:")
+AMOUNT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
 
-json_input = st.text_area("Expense JSON", value="", height=200, placeholder="Paste your expense JSON here...")
+def is_valid_amount(value: str) -> bool:
+    """Accept only plain integers or decimals (e.g. 50 or 50.25). Rejects 'e', '+', '-', etc."""
+    return bool(AMOUNT_PATTERN.match(value.strip()))
+
+st.title("Expense Agent Frontend")
+
+tab_form, tab_json = st.tabs(["Fill Form", "Raw JSON"])
+
+with tab_form:
+    st.subheader("Fill in Expense Details")
+    with st.form("expense_form"):
+        amount_input = st.text_input(
+            "Amount *",
+            placeholder="e.g. 50.25",
+            help="Enter a positive number. Decimals allowed (e.g. 50.25). No letters or symbols.",
+        )
+        submitter = st.text_input("Submitter Email *", placeholder="alice@example.com")
+        category = st.selectbox("Category *", ["Meals", "Travel", "Accommodation", "Equipment", "Other"])
+        description = st.text_input("Description", placeholder="Brief description of the expense")
+        date = st.date_input("Date *")
+        form_submitted = st.form_submit_button("Submit Expense")
+
+    if form_submitted:
+        errors = []
+        if not amount_input.strip():
+            errors.append("Amount is required.")
+        elif not is_valid_amount(amount_input):
+            errors.append("Amount must contain only digits and an optional decimal point (e.g. 50.25). Characters like 'e', '+', '-' are not allowed.")
+        if not submitter.strip():
+            errors.append("Submitter email is required.")
+
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            json_input = json.dumps({
+                "amount": float(amount_input.strip()),
+                "submitter": submitter.strip(),
+                "category": category,
+                "description": description.strip(),
+                "date": str(date),
+            })
+            st.session_state["pending_json"] = json_input
+            st.success("Form validated. Submitting to agent...")
+            st.rerun()
+
+with tab_json:
+    st.subheader("Submit Raw JSON")
+    json_input = st.text_area("Expense JSON", value="", height=200, placeholder="Paste your expense JSON here...")
 
 def run_agent(payload_dict):
     events = []
@@ -61,21 +109,26 @@ def process_events(events):
     if not paused and final_output:
         st.session_state.final_output = final_output
 
-if st.button("Submit Expense"):
+pending = st.session_state.pop("pending_json", None)
+
+with tab_json:
+    if st.button("Submit Expense"):
+        pending = json_input
+
+if pending:
     try:
-        # Reset state on new submission
         session = agent_runtime.create_session(user_id="streamlit_user")
         st.session_state.session_id = session["id"]
         st.session_state.waiting_for_input = False
         st.session_state.final_output = None
         st.session_state.agent_messages = []
-        
-        data = json.loads(json_input)
+
+        data = json.loads(pending)
         with st.spinner("Processing expense..."):
             message_dict = {"parts": [{"text": json.dumps(data)}], "role": "user"}
             events = run_agent(message_dict)
             process_events(events)
-            
+
     except json.JSONDecodeError:
         st.error("Invalid JSON input. Please correct the JSON and try again.")
     except Exception as e:
