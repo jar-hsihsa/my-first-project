@@ -14,6 +14,7 @@
 
 import os
 import json
+import logging
 import base64
 import re
 import sqlite3
@@ -46,71 +47,88 @@ if use_vertex:
     os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
 
 
+# Load company policies once at module startup (Bug #6: avoid repeated file I/O per request)
+_POLICIES_PATH: str = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "company_policies.json"
+)
+try:
+    with open(_POLICIES_PATH, "r") as _f:
+        _COMPANY_POLICIES: dict = json.load(_f)
+except Exception as _e:
+    logging.warning("Could not load company_policies.json: %s — using empty policy.", _e)
+    _COMPANY_POLICIES = {}
+
+
 # SQLite Duplicate Detection Database Helpers
-def get_db_connection():
-    dir_path = os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.join(os.path.dirname(dir_path), "expenses.db")
-    return sqlite3.connect(db_path)
+
+_DB_PATH: str = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "expenses.db"
+)
 
 
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    # Drop table to generate fresh invoices on restart
-    cursor.execute("DROP TABLE IF EXISTS expenses")
-    cursor.execute("""
-        CREATE TABLE expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount REAL,
-            submitter TEXT,
-            category TEXT,
-            description TEXT,
-            date TEXT,
-            status TEXT
-        )
-    """)
+    """Create required tables if they don't already exist."""
+    with sqlite3.connect(_DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL,
+                submitter TEXT,
+                category TEXT,
+                description TEXT,
+                date TEXT,
+                status TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_approvals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                interrupt_id TEXT,
+                message TEXT,
+                receipt_bytes TEXT,
+                submitter_email TEXT,
+                raw_json TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
 
-    conn.commit()
-    conn.close()
 
-
-def check_duplicate(amount: float, date: str, submitter: str) -> bool:
+def check_duplicate(amount: float, date: str, submitter: str, description: str) -> bool:
+    """Return True if an identical expense (same amount/submitter/date/description) exists."""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM expenses WHERE amount = ? AND date = ? AND submitter = ?",
-            (amount, date, submitter)
-        )
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count > 0
+        with sqlite3.connect(_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM expenses "
+                "WHERE amount = ? AND date = ? AND submitter = ? AND description = ?",
+                (amount, date, submitter, description),
+            )
+            return cursor.fetchone()[0] > 0
     except Exception:
         return False
 
 
 def insert_expense(amount: float, date: str, submitter: str, category: str, description: str):
+    """Insert a new expense row; logs on failure instead of silently swallowing."""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO expenses (amount, date, submitter, category, description) VALUES (?, ?, ?, ?, ?)",
-            (amount, date, submitter, category, description)
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO expenses (amount, date, submitter, category, description) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (amount, date, submitter, category, description),
+            )
+            conn.commit()
+    except Exception as e:
+        logging.error("insert_expense failed: %s", e)
 
-
-# Initialize database
-init_db()
 
 
 class ExpenseReport(BaseModel):
     amount: float = Field(description="The dollar amount of the expense.")
     submitter: str = Field(description="The name or email of the person submitting the expense.")
-    category: str = Field(description="The category of the expense (e.g., travel, meals).")
+    category: str = Field(description="The category of the expense. MUST be exactly one of: 'Meals', 'Travel', 'Equipment', or 'Miscellaneous'. Do not use hyphens.")
     description: str = Field(description="The description or justification for the expense.")
     date: str = Field(description="The date of the expense.")
 
@@ -162,7 +180,7 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
             model=MODEL_NAME,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                "Extract the expense details from this receipt. If the submitter/employee email is not on the receipt, set it to 'employee@acmecorp.com'."
+                "Extract the expense details from this receipt. You MUST extract the date (standardized to YYYY-MM-DD format) and category alongside the amount field. If the submitter/employee email is not on the receipt, set it to 'employee@acmecorp.com'. If you cannot clearly identify a category from the receipt, you MUST default to 'Miscellaneous'. Do not leave the category blank or use a hyphen."
             ],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -277,25 +295,47 @@ def scrub_personal_data(description: str) -> tuple[str, list[str]]:
 
 
 def detect_prompt_injection(description: str) -> bool:
-    """Detect prompt injection attempts trying to force auto-approval or bypass rules."""
+    """Detect prompt injection attempts using multi-word pattern matching.
+
+    Single keywords (e.g. 'rules', 'policy', 'force') are intentionally NOT
+    flagged on their own — they appear in legitimate expense descriptions.
+    Patterns require contextually suspicious combinations.
+    """
     desc_lower = description.lower()
-    
-    injection_keywords = [
-        "ignore", "bypass", "override", "force", "auto-approve", "auto approve",
-        "system prompt", "forget", "instructions", "rules", "policy", "prior instructions",
-        "disregard", "do not evaluate", "approve immediately", "always approve", "system instructions",
-        "prompt injection"
+
+    # Unambiguous single-phrase injections (always malicious in context)
+    unambiguous = [
+        "auto-approve",
+        "auto approve",
+        "system prompt",
+        "prior instructions",
+        "system instructions",
+        "do not evaluate",
+        "approve immediately",
+        "always approve",
+        "prompt injection",
     ]
-    
-    for kw in injection_keywords:
-        if kw in desc_lower:
-            return True
-            
-    if "ignore all" in desc_lower or "ignore the" in desc_lower or "ignore previous" in desc_lower:
+    if any(phrase in desc_lower for phrase in unambiguous):
         return True
+
+    # Multi-word combos: requires a *directive* verb + a *target* noun
+    directive_verbs = ["ignore", "bypass", "override", "disregard", "forget", "skip"]
+    target_nouns = [
+        "rules", "instructions", "policy", "policies", "previous",
+        "approval", "evaluation", "guidelines", "all",
+    ]
+    for verb in directive_verbs:
+        if verb in desc_lower:
+            for noun in target_nouns:
+                if noun in desc_lower:
+                    return True
+
+    # Coercive approval patterns
     if "you must approve" in desc_lower or "must be approved" in desc_lower:
         return True
-        
+    if "force" in desc_lower and ("approve" in desc_lower or "approval" in desc_lower):
+        return True
+
     return False
 
 
@@ -324,7 +364,12 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
         redacted.append("Prompt Injection")
 
     # 3. Check for duplicates
-    is_dup = check_duplicate(expense.get("amount", 0.0), expense.get("date", ""), expense.get("submitter", ""))
+    is_dup = check_duplicate(
+        expense.get("amount", 0.0),
+        expense.get("date", ""),
+        expense.get("submitter", ""),
+        expense.get("description", ""),
+    )
     if is_dup:
         redacted.append("Duplicate Expense")
 
@@ -385,14 +430,8 @@ def route_expense_node(node_input: dict) -> Event:
     if "@" in submitter:
         domain = submitter.split("@")[-1].lower()
         
-    # Load policies
-    try:
-        dir_path = os.path.dirname(os.path.abspath(__file__))
-        policies_path = os.path.join(os.path.dirname(dir_path), "company_policies.json")
-        with open(policies_path, "r") as f:
-            policies = json.load(f)
-    except Exception:
-        policies = {}
+    # Use module-level cached policies (loaded once at startup)
+    policies = _COMPANY_POLICIES
         
     company_policy = policies.get(domain, policies.get("default", {}))
     company_name = company_policy.get("company_name", "Generic Corporate")
@@ -495,12 +534,14 @@ async def human_approval_gate(ctx: Context, node_input: dict):
     if redacted:
         security_lines += f"\n🔒 Redacted PII Categories: {', '.join(redacted)}"
 
+    # json is already imported at module level — removed redundant inner import
     msg = (
         f"EXPENSE APPROVAL REQUIRED:{security_lines}\n"
         f"Expense of ${expense['amount']} by {expense['submitter']} "
         f"for '{expense['description']}' requires review.\n"
         f"Risk Assessment: {risk_assessment}\n"
-        f"Please reply with 'Approve' or 'Reject' (or custom message)."
+        f"Please reply with 'Approve' or 'Reject' (or custom message).\n"
+        f"---JSON---\n{json.dumps(expense)}"
     )
     yield RequestInput(interrupt_id=interrupt_id, message=msg)
 
@@ -512,8 +553,8 @@ def outcome_node(ctx: Context, node_input: Any):
     if isinstance(node_input, dict) and "decision" in node_input:
         expense = node_input["expense"]
         decision = node_input["decision"]
-        reason = node_input["reason"]
-        risk = node_input["risk_assessment"]
+        reason = node_input.get("reason", "N/A")  # Bug #7: use .get() to avoid KeyError
+        risk = node_input.get("risk_assessment", "N/A")  # Bug #7: use .get() to avoid KeyError
     else:
         # It's a resume response string from human_approval_gate
         expense = ctx.state.get("expense", {})
@@ -559,14 +600,6 @@ def outcome_node(ctx: Context, node_input: Any):
         )
     )
     
-    if decision == "Approved":
-        insert_expense(
-            expense.get("amount", 0.0),
-            expense.get("date", ""),
-            expense.get("submitter", ""),
-            expense.get("category", ""),
-            expense.get("description", "")
-        )
 
     output_dict = {
         "expense": expense,

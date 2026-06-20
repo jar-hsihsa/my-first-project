@@ -77,8 +77,12 @@ class AgentEngineApp(AdkApp):
                     logging.info(f"[{severity}] Struct Log: {data}")
             self.logger = FallbackLogger()
 
-        if gemini_location:
-            os.environ["GOOGLE_CLOUD_LOCATION"] = gemini_location
+        # Bug #1: Read the env var directly here; do not rely on the module-level
+        # `gemini_location` variable which is defined later in the file and would
+        # raise NameError if set_up() is ever called before module init completes.
+        _gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+        if _gemini_location:
+            os.environ["GOOGLE_CLOUD_LOCATION"] = _gemini_location
 
     def register_feedback(self, feedback: dict[str, Any]) -> None:
         """Collect and log feedback."""
@@ -98,11 +102,40 @@ class AgentEngineApp(AdkApp):
 
 gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
 logs_bucket_name = os.environ.get("LOGS_BUCKET_NAME")
-agent_runtime = AgentEngineApp(
-    app=adk_app,
-    artifact_service_builder=lambda: (
-        GcsArtifactService(bucket_name=logs_bucket_name)
-        if logs_bucket_name
-        else InMemoryArtifactService()
-    ),
-)
+
+# ── Lazy singleton ─────────────────────────────────────────────
+# AgentEngineApp.__init__ + set_up() are expensive: they call
+# vertexai.init(), google.auth.default() (network), and hydrate
+# the ADK session.db.  Deferring them until the first real call
+# shaves 2-5 s off every Streamlit cold-start / page reload.
+_agent_runtime_instance: "AgentEngineApp | None" = None
+
+
+def _build_agent_runtime() -> "AgentEngineApp":
+    return AgentEngineApp(
+        app=adk_app,
+        artifact_service_builder=lambda: (
+            GcsArtifactService(bucket_name=logs_bucket_name)
+            if logs_bucket_name
+            else InMemoryArtifactService()
+        ),
+    )
+
+
+class _LazyAgentRuntime:
+    """Proxy that instantiates AgentEngineApp on first attribute access."""
+
+    def __init__(self):
+        self._instance: "AgentEngineApp | None" = None
+
+    def _get(self) -> "AgentEngineApp":
+        if self._instance is None:
+            self._instance = _build_agent_runtime()
+        return self._instance
+
+    def __getattr__(self, name: str):
+        return getattr(self._get(), name)
+
+
+agent_runtime = _LazyAgentRuntime()
+
