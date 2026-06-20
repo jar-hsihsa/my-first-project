@@ -1,0 +1,141 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+from dotenv import load_dotenv
+# Load environment variables from .env file at runtime first
+load_dotenv()
+
+import logging
+import os
+from typing import Any
+from unittest.mock import MagicMock
+
+import google.auth
+import google.auth.exceptions
+
+# Handle environment without GCP default credentials gracefully for local dev / AI Studio
+if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() == "false":
+    google.auth.default = MagicMock(return_value=(MagicMock(), "dummy-gcp-project"))
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project")
+    try:
+        from google.cloud.aiplatform.utils import resource_manager_utils
+        resource_manager_utils.get_project_id = lambda *args, **kwargs: "dummy-gcp-project"
+    except ImportError:
+        pass
+else:
+    try:
+        google.auth.default()
+    except google.auth.exceptions.DefaultCredentialsError:
+        google.auth.default = MagicMock(return_value=(MagicMock(), "dummy-gcp-project"))
+        os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project")
+
+import vertexai
+from google.adk.artifacts import GcsArtifactService, InMemoryArtifactService
+from google.cloud import logging as google_cloud_logging
+from vertexai.agent_engines.templates.adk import AdkApp
+
+from expense_agent.agent import app as adk_app
+from expense_agent.app_utils.telemetry import setup_telemetry
+from expense_agent.app_utils.typing import Feedback
+
+
+class AgentEngineApp(AdkApp):
+    def set_up(self) -> None:
+        """Initialize the agent engine app with logging and telemetry."""
+        if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() != "false":
+            vertexai.init(project=os.environ.get("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project"))
+        else:
+            try:
+                from google.cloud.aiplatform.utils import resource_manager_utils
+                resource_manager_utils.get_project_id = lambda *args, **kwargs: "dummy-gcp-project"
+            except ImportError:
+                pass
+        
+        setup_telemetry()
+        super().set_up()
+        logging.basicConfig(level=logging.INFO)
+        if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() != "false":
+            try:
+                logging_client = google_cloud_logging.Client()
+                self.logger = logging_client.logger(__name__)
+            except Exception:
+                pass
+
+        if not hasattr(self, "logger"):
+            class FallbackLogger:
+                def log_struct(self, data, severity="INFO"):
+                    logging.info(f"[{severity}] Struct Log: {data}")
+            self.logger = FallbackLogger()
+
+        # Bug #1: Read the env var directly here; do not rely on the module-level
+        # `gemini_location` variable which is defined later in the file and would
+        # raise NameError if set_up() is ever called before module init completes.
+        _gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+        if _gemini_location:
+            os.environ["GOOGLE_CLOUD_LOCATION"] = _gemini_location
+
+    def register_feedback(self, feedback: dict[str, Any]) -> None:
+        """Collect and log feedback."""
+        feedback_obj = Feedback.model_validate(feedback)
+        self.logger.log_struct(feedback_obj.model_dump(), severity="INFO")
+
+    def register_operations(self) -> dict[str, list[str]]:
+        """Registers the operations of the Agent."""
+        operations = super().register_operations()
+        operations[""] = [*operations.get("", []), "register_feedback"]
+        return operations
+
+    def clone(self) -> "AgentEngineApp":
+        """Returns a clone of the Agent Runtime application."""
+        return self
+
+
+gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+logs_bucket_name = os.environ.get("LOGS_BUCKET_NAME")
+
+# ── Lazy singleton ─────────────────────────────────────────────
+# AgentEngineApp.__init__ + set_up() are expensive: they call
+# vertexai.init(), google.auth.default() (network), and hydrate
+# the ADK session.db.  Deferring them until the first real call
+# shaves 2-5 s off every Streamlit cold-start / page reload.
+_agent_runtime_instance: "AgentEngineApp | None" = None
+
+
+def _build_agent_runtime() -> "AgentEngineApp":
+    return AgentEngineApp(
+        app=adk_app,
+        artifact_service_builder=lambda: (
+            GcsArtifactService(bucket_name=logs_bucket_name)
+            if logs_bucket_name
+            else InMemoryArtifactService()
+        ),
+    )
+
+
+class _LazyAgentRuntime:
+    """Proxy that instantiates AgentEngineApp on first attribute access."""
+
+    def __init__(self):
+        self._instance: "AgentEngineApp | None" = None
+
+    def _get(self) -> "AgentEngineApp":
+        if self._instance is None:
+            self._instance = _build_agent_runtime()
+        return self._instance
+
+    def __getattr__(self, name: str):
+        return getattr(self._get(), name)
+
+
+agent_runtime = _LazyAgentRuntime()
+

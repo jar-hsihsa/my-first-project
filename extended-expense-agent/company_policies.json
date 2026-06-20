@@ -1,0 +1,20 @@
+{
+  "acmecorp.com": {
+    "company_name": "Acme Corp",
+    "Meals": 75.0,
+    "Travel": 150.0,
+    "Equipment": 100.0,
+    "Default": 50.0
+  },
+  "globex.com": {
+    "company_name": "Globex Corporation",
+    "Meals": 100.0,
+    "Travel": 200.0,
+    "Equipment": 300.0,
+    "Default": 100.0
+  },
+  "default": {
+    "company_name": "Generic Corporate",
+    "Default": 100.0
+  }
+}
