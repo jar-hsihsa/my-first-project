@@ -680,7 +680,7 @@ def run_agent(payload_dict, specific_session_id=None):
   return asyncio.run(_run())
 
 
-def process_events(events, run_session_id=None):
+def process_events(events, run_session_id=None, submitter_email=None):
   final_output = None
   paused = False
   session_to_track = run_session_id if run_session_id else st.session_state.session_id
@@ -729,7 +729,9 @@ def process_events(events, run_session_id=None):
       # duplicate inserts caused by Streamlit reruns re-executing this block.
       already_saved = session_to_track in st.session_state.get("saved_session_ids", set())
       if not already_saved:
-        if not final_output["expense"].get("submitter"):
+        if submitter_email:
+          final_output["expense"]["submitter"] = submitter_email
+        elif not final_output["expense"].get("submitter") or final_output["expense"]["submitter"] == "employee@acmecorp.com":
           final_output["expense"]["submitter"] = st.session_state.email
         decision = final_output.get("decision") or "Approved"
         save_expense(final_output["expense"], decision)
@@ -985,6 +987,7 @@ if st.session_state.role == "Employee":
           payload_dict = {
             "image_data": base64_image,
             "mime_type": mime_type,
+            "submitter": st.session_state.email,
           }
           with st.spinner("Processing receipt…"):
             message_dict = {
@@ -1307,7 +1310,7 @@ elif st.session_state.role == "Admin":
                   }]
                 }
                 events = run_agent(payload, specific_session_id=session_id)
-                process_events(events, run_session_id=session_id)
+                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
                 delete_pending_approval(db_id)
                 st.rerun()
         with col2:
@@ -1324,7 +1327,7 @@ elif st.session_state.role == "Admin":
                 }]
               }
               events = run_agent(payload, specific_session_id=session_id)
-              process_events(events, run_session_id=session_id)
+              process_events(events, run_session_id=session_id, submitter_email=submitter_email)
               delete_pending_approval(db_id)
               st.rerun()
   

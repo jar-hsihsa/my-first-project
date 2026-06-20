@@ -173,6 +173,8 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
             )
         )
         data_dict = json.loads(response.text)
+        if "submitter" in event and event["submitter"]:
+            data_dict["submitter"] = event["submitter"]
         return ExpenseReport.model_validate(data_dict)
 
     data = event.get("data")
