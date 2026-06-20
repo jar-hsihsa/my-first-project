@@ -68,8 +68,9 @@ class AgentEngineApp(AdkApp):
                     logging.info(f"[{severity}] Struct Log: {data}")
             self.logger = FallbackLogger()
 
-        if gemini_location:
-            os.environ["GOOGLE_CLOUD_LOCATION"] = gemini_location
+        _gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+        if _gemini_location:
+            os.environ["GOOGLE_CLOUD_LOCATION"] = _gemini_location
 
     def register_feedback(self, feedback: dict[str, Any]) -> None:
         """Collect and log feedback."""

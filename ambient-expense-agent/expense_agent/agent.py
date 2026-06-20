@@ -196,25 +196,47 @@ def scrub_personal_data(description: str) -> tuple[str, list[str]]:
 
 
 def detect_prompt_injection(description: str) -> bool:
-    """Detect prompt injection attempts trying to force auto-approval or bypass rules."""
+    """Detect prompt injection attempts using multi-word pattern matching.
+
+    Single keywords (e.g. 'rules', 'policy', 'force') are intentionally NOT
+    flagged on their own — they appear in legitimate expense descriptions.
+    Patterns require contextually suspicious combinations.
+    """
     desc_lower = description.lower()
-    
-    injection_keywords = [
-        "ignore", "bypass", "override", "force", "auto-approve", "auto approve",
-        "system prompt", "forget", "instructions", "rules", "policy", "prior instructions",
-        "disregard", "do not evaluate", "approve immediately", "always approve", "system instructions",
-        "prompt injection"
+
+    # Unambiguous single-phrase injections (always malicious in context)
+    unambiguous = [
+        "auto-approve",
+        "auto approve",
+        "system prompt",
+        "prior instructions",
+        "system instructions",
+        "do not evaluate",
+        "approve immediately",
+        "always approve",
+        "prompt injection",
     ]
-    
-    for kw in injection_keywords:
-        if kw in desc_lower:
-            return True
-            
-    if "ignore all" in desc_lower or "ignore the" in desc_lower or "ignore previous" in desc_lower:
+    if any(phrase in desc_lower for phrase in unambiguous):
         return True
+
+    # Multi-word combos: requires a *directive* verb + a *target* noun
+    directive_verbs = ["ignore", "bypass", "override", "disregard", "forget", "skip"]
+    target_nouns = [
+        "rules", "instructions", "policy", "policies", "previous",
+        "approval", "evaluation", "guidelines", "all",
+    ]
+    for verb in directive_verbs:
+        if verb in desc_lower:
+            for noun in target_nouns:
+                if noun in desc_lower:
+                    return True
+
+    # Coercive approval patterns
     if "you must approve" in desc_lower or "must be approved" in desc_lower:
         return True
-        
+    if "force" in desc_lower and ("approve" in desc_lower or "approval" in desc_lower):
+        return True
+
     return False
 
 

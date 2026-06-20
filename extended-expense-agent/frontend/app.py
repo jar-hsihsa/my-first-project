@@ -635,11 +635,11 @@ def get_all_pending_approvals() -> list[dict]:
   except Exception:
     return []
 
-def delete_pending_approval(interrupt_id: str):
-  """Delete a pending approval by interrupt_id. Uses context manager (Bug #4)."""
+def delete_pending_approval(record_id: int):
+  """Delete a pending approval by database row ID. Uses context manager."""
   try:
     with sqlite3.connect(_db_path()) as conn:
-      conn.execute("DELETE FROM pending_approvals WHERE interrupt_id = ?", (interrupt_id,))
+      conn.execute("DELETE FROM pending_approvals WHERE id = ?", (record_id,))
       conn.commit()
   except Exception:
     pass
@@ -680,9 +680,10 @@ def run_agent(payload_dict, specific_session_id=None):
   return asyncio.run(_run())
 
 
-def process_events(events):
+def process_events(events, run_session_id=None, submitter_email=None):
   final_output = None
   paused = False
+  session_to_track = run_session_id if run_session_id else st.session_state.session_id
 
   for event in events:
     content = event.get("content")
@@ -709,7 +710,7 @@ def process_events(events):
               # Update session state with parsed values for future use if needed
               st.session_state.raw_json = raw_json
             save_pending_approval(
-              st.session_state.session_id,
+              session_to_track,
               fn_call.get("id"),
               st.session_state.interrupt_message,
               st.session_state.email,
@@ -726,14 +727,16 @@ def process_events(events):
     if isinstance(final_output, dict) and "expense" in final_output:
       # Session-level guard: only save once per ADK session to prevent
       # duplicate inserts caused by Streamlit reruns re-executing this block.
-      current_session = st.session_state.get("session_id")
-      already_saved = current_session in st.session_state.get("saved_session_ids", set())
+      already_saved = session_to_track in st.session_state.get("saved_session_ids", set())
       if not already_saved:
-        final_output["expense"]["submitter"] = st.session_state.email
+        if submitter_email:
+          final_output["expense"]["submitter"] = submitter_email
+        elif not final_output["expense"].get("submitter") or final_output["expense"]["submitter"] == "employee@acmecorp.com":
+          final_output["expense"]["submitter"] = st.session_state.email
         decision = final_output.get("decision") or "Approved"
         save_expense(final_output["expense"], decision)
-        if current_session:
-          st.session_state.saved_session_ids.add(current_session)
+        if session_to_track:
+          st.session_state.saved_session_ids.add(session_to_track)
 
 
 def parse_interrupt_details(msg: str) -> dict:
@@ -984,6 +987,7 @@ if st.session_state.role == "Employee":
           payload_dict = {
             "image_data": base64_image,
             "mime_type": mime_type,
+            "submitter": st.session_state.email,
           }
           with st.spinner("Processing receipt…"):
             message_dict = {
@@ -1171,6 +1175,7 @@ elif st.session_state.role == "Admin":
         interrupt_id = record.get("interrupt_id", "")
         submitter_email = record.get("submitter_email", "")
         receipt_bytes = record.get("receipt_bytes", "")
+        db_id = record.get("id", "")
   
         details = parse_interrupt_details(interrupt_message)
         submitter_str = details.get("submitter", submitter_email)
@@ -1284,24 +1289,46 @@ elif st.session_state.role == "Admin":
         rejection_reason = st.text_input(
           "Add Comment (required for rejection):",
           placeholder="e.g., Missing receipt, Out of budget…",
-          key=f"rej_reason_{interrupt_id}"
+          key=f"rej_reason_{db_id}"
         )
   
         col1, col2 = st.columns(2)
         with col1:
-          if st.button("Reject", use_container_width=True, key=f"btn_reject_{interrupt_id}"):
+          if st.button("Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
             if not rejection_reason.strip():
               st.error("A rejection reason is mandatory.")
             else:
-              with st.spinner("Saving…"):
-                save_expense({"amount": float(amount_str), "submitter": submitter_email, "description": description_str, "date": exp_date, "category": exp_category}, "Rejected")
-                delete_pending_approval(interrupt_id)
+              with st.spinner("Resuming workflow to reject..."):
+                payload = {
+                  "role": "tool",
+                  "parts": [{
+                    "function_response": {
+                      "id": interrupt_id,
+                      "name": "adk_request_input",
+                      "response": {"output": f"Reject: {rejection_reason}"}
+                    }
+                  }]
+                }
+                events = run_agent(payload, specific_session_id=session_id)
+                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
+                delete_pending_approval(db_id)
                 st.rerun()
         with col2:
-          if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{interrupt_id}"):
-            with st.spinner("Saving…"):
-              save_expense({"amount": float(amount_str), "submitter": submitter_email, "description": description_str, "date": exp_date, "category": exp_category}, "Approved")
-              delete_pending_approval(interrupt_id)
+          if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
+            with st.spinner("Resuming workflow to approve..."):
+              payload = {
+                "role": "tool",
+                "parts": [{
+                  "function_response": {
+                    "id": interrupt_id,
+                    "name": "adk_request_input",
+                    "response": {"output": "Approve"}
+                  }
+                }]
+              }
+              events = run_agent(payload, specific_session_id=session_id)
+              process_events(events, run_session_id=session_id, submitter_email=submitter_email)
+              delete_pending_approval(db_id)
               st.rerun()
   
     else:
