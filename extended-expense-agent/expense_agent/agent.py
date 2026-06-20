@@ -110,25 +110,10 @@ def check_duplicate(amount: float, date: str, submitter: str, description: str) 
         return False
 
 
-def insert_expense(amount: float, date: str, submitter: str, category: str, description: str):
-    """Insert a new expense row; logs on failure instead of silently swallowing."""
-    try:
-        with sqlite3.connect(_DB_PATH) as conn:
-            conn.execute(
-                "INSERT INTO expenses (amount, date, submitter, category, description) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (amount, date, submitter, category, description),
-            )
-            conn.commit()
-    except Exception as e:
-        logging.error("insert_expense failed: %s", e)
-
-
-
 class ExpenseReport(BaseModel):
     amount: float = Field(description="The dollar amount of the expense.")
     submitter: str = Field(description="The name or email of the person submitting the expense.")
-    category: str = Field(description="The category of the expense. MUST be exactly one of: 'Meals', 'Travel', 'Equipment', or 'Miscellaneous'. Do not use hyphens.")
+    category: str = Field(description="The category of the expense. MUST be exactly one of: 'Meals', 'Travel', 'Equipment', 'Office Supplies', 'Software', or 'Miscellaneous'. Do not use hyphens.")
     description: str = Field(description="The description or justification for the expense.")
     date: str = Field(description="The date of the expense.")
 
