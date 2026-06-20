@@ -460,7 +460,7 @@ def auto_approve_node(node_input: dict) -> dict:
     company_name = node_input.get("company_name", "Generic Corporate")
     return {
         "expense": expense,
-        "decision": "Approved",
+        "decision": "Auto-Approved",
         "reason": f"Amount ${expense['amount']} is under {company_name} threshold of ${threshold}. Auto-approved.",
         "risk_assessment": "Skipped (Auto-approved)"
     }

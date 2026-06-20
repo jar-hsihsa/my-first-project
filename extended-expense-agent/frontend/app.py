@@ -288,6 +288,11 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   color: #059669;
   border: 1px solid #A7F3D0;
 }
+.status-auto-approved {
+  background: #E0E7FF;
+  color: #3B5BDB;
+  border: 1px solid #C7D2FE;
+}
 .status-rejected {
   background: #FEE2E2;
   color: #DC2626;
@@ -1117,7 +1122,7 @@ if st.session_state.role == "Employee":
       exp_id_raw = exp.get('id', 0)
       exp_id = str(exp_id_raw) if str(exp_id_raw).startswith("PENDING") else f"EX{int(exp_id_raw):04d}"
       status = exp.get("status", "Approved")
-      status_cls = "status-approved" if status == "Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting")
+      status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
       rows_html += f"""<tr>
         <td><strong>{exp_id}</strong></td>
         <td>{exp.get('date','—')}</td>
@@ -1308,7 +1313,7 @@ elif st.session_state.role == "Admin":
           decision = out.get("decision", "N/A")
           reason = out.get("reason", "")
           status_cls = (
-            "status-approved" if decision == "Approved" else "status-rejected"
+            "status-approved" if decision == "Approved" else ("status-auto-approved" if decision == "Auto-Approved" else "status-rejected")
           )
           st.markdown(
             f"""<div class="detail-card">
@@ -1350,7 +1355,7 @@ elif st.session_state.role == "Admin":
       emp_init = _initials(exp.get("submitter", ""))
       emp_name = _display_name(exp.get("submitter", ""))
       status = exp.get("status", "Approved")
-      status_cls = "status-approved" if status == "Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting")
+      status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
       rows_html += f"""<tr>
         <td><strong>{exp_id}</strong></td>
         <td>
