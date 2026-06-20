@@ -635,11 +635,11 @@ def get_all_pending_approvals() -> list[dict]:
   except Exception:
     return []
 
-def delete_pending_approval(interrupt_id: str):
-  """Delete a pending approval by interrupt_id. Uses context manager (Bug #4)."""
+def delete_pending_approval(record_id: int):
+  """Delete a pending approval by database row ID. Uses context manager."""
   try:
     with sqlite3.connect(_db_path()) as conn:
-      conn.execute("DELETE FROM pending_approvals WHERE interrupt_id = ?", (interrupt_id,))
+      conn.execute("DELETE FROM pending_approvals WHERE id = ?", (record_id,))
       conn.commit()
   except Exception:
     pass
@@ -1172,6 +1172,7 @@ elif st.session_state.role == "Admin":
         interrupt_id = record.get("interrupt_id", "")
         submitter_email = record.get("submitter_email", "")
         receipt_bytes = record.get("receipt_bytes", "")
+        db_id = record.get("id", "")
   
         details = parse_interrupt_details(interrupt_message)
         submitter_str = details.get("submitter", submitter_email)
@@ -1285,12 +1286,12 @@ elif st.session_state.role == "Admin":
         rejection_reason = st.text_input(
           "Add Comment (required for rejection):",
           placeholder="e.g., Missing receipt, Out of budget…",
-          key=f"rej_reason_{interrupt_id}"
+          key=f"rej_reason_{db_id}"
         )
   
         col1, col2 = st.columns(2)
         with col1:
-          if st.button("Reject", use_container_width=True, key=f"btn_reject_{interrupt_id}"):
+          if st.button("Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
             if not rejection_reason.strip():
               st.error("A rejection reason is mandatory.")
             else:
@@ -1307,10 +1308,10 @@ elif st.session_state.role == "Admin":
                 }
                 events = run_agent(payload, specific_session_id=session_id)
                 process_events(events, run_session_id=session_id)
-                delete_pending_approval(interrupt_id)
+                delete_pending_approval(db_id)
                 st.rerun()
         with col2:
-          if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{interrupt_id}"):
+          if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
             with st.spinner("Resuming workflow to approve..."):
               payload = {
                 "role": "tool",
@@ -1324,7 +1325,7 @@ elif st.session_state.role == "Admin":
               }
               events = run_agent(payload, specific_session_id=session_id)
               process_events(events, run_session_id=session_id)
-              delete_pending_approval(interrupt_id)
+              delete_pending_approval(db_id)
               st.rerun()
   
     else:
