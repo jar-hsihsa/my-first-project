@@ -1139,9 +1139,8 @@ if st.session_state.role == "Employee":
         filter_category = st.multiselect("Category", options=avail_categories, key="emp_filter_category")
         filter_status = st.multiselect("Status", options=avail_statuses, key="emp_filter_status")
       with col3:
-        filter_min_amt = st.number_input("Min Amount ($)", min_value=0.0, step=1.0, value=0.0, key="emp_filter_min_amt")
-        max_expense_val = max((float(e.get("amount", 0.0)) for e in all_my_expenses), default=1000.0)
-        filter_max_amt = st.number_input("Max Amount ($)", min_value=0.0, step=1.0, value=max_expense_val, key="emp_filter_max_amt")
+        filter_min_amt = st.number_input("Min Amount ($)", min_value=0.0, step=1.0, value=None, key="emp_filter_min_amt")
+        filter_max_amt = st.number_input("Max Amount ($)", min_value=0.0, step=1.0, value=None, key="emp_filter_max_amt")
         filter_desc = st.text_input("Description / Purpose", key="emp_filter_desc", placeholder="e.g. dinner")
 
     # Apply filters
@@ -1168,7 +1167,9 @@ if st.session_state.role == "Employee":
         
       # Match Amount range
       amt = float(exp.get("amount", 0.0))
-      if amt < filter_min_amt or amt > filter_max_amt:
+      if filter_min_amt is not None and amt < filter_min_amt:
+        continue
+      if filter_max_amt is not None and amt > filter_max_amt:
         continue
         
       # Match Description
@@ -1449,9 +1450,8 @@ elif st.session_state.role == "Admin":
         filter_category = st.multiselect("Category", options=avail_categories, key="admin_filter_category")
         filter_status = st.multiselect("Status", options=avail_statuses, key="admin_filter_status")
       with col3:
-        filter_min_amt = st.number_input("Min Amount ($)", min_value=0.0, step=1.0, value=0.0, key="admin_filter_min_amt")
-        max_expense_val = max((float(e.get("amount", 0.0)) for e in all_expenses), default=1000.0)
-        filter_max_amt = st.number_input("Max Amount ($)", min_value=0.0, step=1.0, value=max_expense_val, key="admin_filter_max_amt")
+        filter_min_amt = st.number_input("Min Amount ($)", min_value=0.0, step=1.0, value=None, key="admin_filter_min_amt")
+        filter_max_amt = st.number_input("Max Amount ($)", min_value=0.0, step=1.0, value=None, key="admin_filter_max_amt")
         filter_desc = st.text_input("Description / Purpose", key="admin_filter_desc", placeholder="e.g. dinner")
 
     # Apply filters
@@ -1483,7 +1483,9 @@ elif st.session_state.role == "Admin":
         
       # Match Amount range
       amt = float(exp.get("amount", 0.0))
-      if amt < filter_min_amt or amt > filter_max_amt:
+      if filter_min_amt is not None and amt < filter_min_amt:
+        continue
+      if filter_max_amt is not None and amt > filter_max_amt:
         continue
         
       # Match Description
