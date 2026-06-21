@@ -1154,7 +1154,7 @@ if st.session_state.role == "Employee":
     def is_active(*keys):
       for k in keys:
         val = st.session_state.get(k)
-        if val is not None and val != "" and val != []:
+        if val is not None and val != "" and val != [] and val != ():
           return True
       return False
 
@@ -1179,7 +1179,7 @@ if st.session_state.role == "Employee":
         filter_id = st.text_input("Search ID", key="emp_f_id")
     with f_col2:
       with st.popover(plabel("Date", "emp_f_date"), use_container_width=True):
-        filter_date = st.text_input("Search Date", key="emp_f_date")
+        filter_date = st.date_input("Search Date Range", value=[], key="emp_f_date")
     with f_col3:
       with st.popover(plabel("Category", "emp_f_cat"), use_container_width=True):
         filter_category = st.multiselect("Select Category", options=avail_categories, key="emp_f_cat")
@@ -1199,7 +1199,15 @@ if st.session_state.role == "Employee":
       exp_id_raw = exp.get('id', 0)
       exp_id = str(exp_id_raw) if str(exp_id_raw).startswith("PENDING") else f"EX{int(exp_id_raw):04d}"
       if filter_id and filter_id.lower() not in exp_id.lower(): continue
-      if filter_date and filter_date.lower() not in str(exp.get("date", "")).lower(): continue
+      if filter_date:
+        import pandas as pd
+        row_dt = pd.to_datetime(exp.get("date", ""), errors="coerce")
+        if pd.notna(row_dt):
+          row_d = row_dt.date()
+          if len(filter_date) == 1 and row_d != filter_date[0]: continue
+          elif len(filter_date) == 2 and not (filter_date[0] <= row_d <= filter_date[1]): continue
+        else:
+          continue
       if filter_category and exp.get("category") not in filter_category: continue
       if filter_status and exp.get("status") not in filter_status: continue
       amt = float(exp.get("amount", 0.0))
@@ -1471,7 +1479,7 @@ elif st.session_state.role == "Admin":
     def is_active(*keys):
       for k in keys:
         val = st.session_state.get(k)
-        if val is not None and val != "" and val != []:
+        if val is not None and val != "" and val != [] and val != ():
           return True
       return False
 
@@ -1499,7 +1507,7 @@ elif st.session_state.role == "Admin":
         filter_emp = st.text_input("Search Employee", key="adm_f_emp")
     with f_col3:
       with st.popover(plabel("Date", "adm_f_date"), use_container_width=True):
-        filter_date = st.text_input("Search Date", key="adm_f_date")
+        filter_date = st.date_input("Search Date Range", value=[], key="adm_f_date")
     with f_col4:
       with st.popover(plabel("Category", "adm_f_cat"), use_container_width=True):
         filter_category = st.multiselect("Select Category", options=avail_categories, key="adm_f_cat")
@@ -1522,7 +1530,15 @@ elif st.session_state.role == "Admin":
       
       if filter_id and filter_id.lower() not in exp_id.lower(): continue
       if filter_emp and (filter_emp.lower() not in emp_name.lower() and filter_emp.lower() not in emp_email.lower()): continue
-      if filter_date and filter_date.lower() not in str(exp.get("date", "")).lower(): continue
+      if filter_date:
+        import pandas as pd
+        row_dt = pd.to_datetime(exp.get("date", ""), errors="coerce")
+        if pd.notna(row_dt):
+          row_d = row_dt.date()
+          if len(filter_date) == 1 and row_d != filter_date[0]: continue
+          elif len(filter_date) == 2 and not (filter_date[0] <= row_d <= filter_date[1]): continue
+        else:
+          continue
       if filter_category and exp.get("category") not in filter_category: continue
       if filter_status and exp.get("status") not in filter_status: continue
       amt = float(exp.get("amount", 0.0))
