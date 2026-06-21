@@ -6,6 +6,10 @@ import sqlite3
 import asyncio
 import threading
 from datetime import date
+from html import escape as html_escape
+
+import nest_asyncio
+nest_asyncio.apply()
 
 from expense_agent.agent_runtime_app import agent_runtime
 from expense_agent.agent import init_db
@@ -645,6 +649,11 @@ def delete_pending_approval(record_id: int):
     pass
 
 
+def _esc(value: str) -> str:
+  """HTML-escape a string for safe interpolation into unsafe_allow_html markup."""
+  return html_escape(str(value)) if value else "—"
+
+
 def _initials(email: str) -> str:
   """Generate initials from an email."""
   name_part = email.split("@")[0]
@@ -898,8 +907,8 @@ st.markdown(
   f"""<div class="top-header">
     <h1>Expense Approval Portal</h1>
     <div class="top-header-right">
-      <span>Welcome, {display} ({role_label})</span>
-      <span class="user-avatar">{initials}</span>
+      <span>Welcome, {_esc(display)} ({_esc(role_label)})</span>
+      <span class="user-avatar">{_esc(initials)}</span>
     </div>
   </div>""",
   unsafe_allow_html=True,
@@ -1128,12 +1137,12 @@ if st.session_state.role == "Employee":
       status = exp.get("status", "Approved")
       status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
       rows_html += f"""<tr>
-        <td><strong>{exp_id}</strong></td>
-        <td>{exp.get('date','—')}</td>
-        <td>{exp.get('category','—')}</td>
+        <td><strong>{_esc(exp_id)}</strong></td>
+        <td>{_esc(exp.get('date','—'))}</td>
+        <td>{_esc(exp.get('category','—'))}</td>
         <td><strong>${exp.get('amount',0):.2f}</strong></td>
-        <td>{exp.get('description','—')[:40]}</td>
-        <td><span class="status-badge {status_cls}">{status}</span></td>
+        <td>{_esc(exp.get('description','—')[:40])}</td>
+        <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
       </tr>"""
 
     st.markdown(
@@ -1210,19 +1219,19 @@ elif st.session_state.role == "Admin":
             </tr></thead>
             <tbody>
             <tr class="row-selected">
-              <td><strong>{exp_id}</strong></td>
+              <td><strong>{_esc(exp_id)}</strong></td>
               <td>
                 <div class="emp-chip">
-                  <span class="emp-avatar">{sub_initials}</span>
+                  <span class="emp-avatar">{_esc(sub_initials)}</span>
                   <div>
-                    <div class="emp-name">{sub_display}</div>
+                    <div class="emp-name">{_esc(sub_display)}</div>
                     <div class="emp-role">Employee</div>
                   </div>
                 </div>
               </td>
-              <td>{exp_date}</td>
-              <td><strong>${amount_str}</strong></td>
-              <td>{exp_category}</td>
+              <td>{_esc(exp_date)}</td>
+              <td><strong>${_esc(amount_str)}</strong></td>
+              <td>{_esc(exp_category)}</td>
               <td><span class="status-badge status-awaiting">Awaiting Approval</span></td>
             </tr>
             </tbody>
@@ -1237,24 +1246,24 @@ elif st.session_state.role == "Admin":
         if has_injection:
           flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">🚨 Prompt Injection</span>'
         if pii_info:
-          flags_html += f'<span class="status-badge status-awaiting" style="margin-right:0.4rem;">🔒 PII: {pii_info}</span>'
+          flags_html += f'<span class="status-badge status-awaiting" style="margin-right:0.4rem;">🔒 PII: {_esc(pii_info)}</span>'
   
         # Detail card
         st.markdown(
           f"""<div class="detail-card">
             <div class="detail-header">
-              <h3>Expense Details: {exp_id} ({sub_display})</h3>
+              <h3>Expense Details: {_esc(exp_id)} ({_esc(sub_display)})</h3>
             </div>
             {f'<div style="margin-bottom:0.75rem;">{flags_html}</div>' if flags_html else ''}
             <div class="detail-grid">
               <div class="detail-label">Date:</div>
-              <div class="detail-value">{exp_date}</div>
+              <div class="detail-value">{_esc(exp_date)}</div>
               <div class="detail-label">Amount:</div>
-              <div class="detail-value"><strong>${amount_str}</strong></div>
+              <div class="detail-value"><strong>${_esc(amount_str)}</strong></div>
               <div class="detail-label">Category:</div>
-              <div class="detail-value">{exp_category}</div>
+              <div class="detail-value">{_esc(exp_category)}</div>
               <div class="detail-label">Purpose:</div>
-              <div class="detail-value">{description_str}</div>
+              <div class="detail-value">{_esc(description_str)}</div>
             </div>
           </div>""",
           unsafe_allow_html=True,
@@ -1346,19 +1355,19 @@ elif st.session_state.role == "Admin":
             f"""<div class="detail-card">
               <div class="detail-header">
                 <h3>Last Reviewed Expense</h3>
-                <span class="status-badge {status_cls}">{decision}</span>
+                <span class="status-badge {status_cls}">{_esc(decision)}</span>
               </div>
               <div class="detail-grid">
                 <div class="detail-label">Amount:</div>
                 <div class="detail-value"><strong>${exp.get('amount',0):.2f}</strong></div>
                 <div class="detail-label">Submitter:</div>
-                <div class="detail-value">{exp.get('submitter','—')}</div>
+                <div class="detail-value">{_esc(exp.get('submitter','—'))}</div>
                 <div class="detail-label">Category:</div>
-                <div class="detail-value">{exp.get('category','—')}</div>
+                <div class="detail-value">{_esc(exp.get('category','—'))}</div>
                 <div class="detail-label">Purpose:</div>
-                <div class="detail-value">{exp.get('description','—')}</div>
+                <div class="detail-value">{_esc(exp.get('description','—'))}</div>
                 <div class="detail-label">Reason:</div>
-                <div class="detail-value">{reason}</div>
+                <div class="detail-value">{_esc(reason)}</div>
               </div>
             </div>""",
             unsafe_allow_html=True,
@@ -1384,20 +1393,20 @@ elif st.session_state.role == "Admin":
       status = exp.get("status", "Approved")
       status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
       rows_html += f"""<tr>
-        <td><strong>{exp_id}</strong></td>
+        <td><strong>{_esc(exp_id)}</strong></td>
         <td>
           <div class="emp-chip">
-            <span class="emp-avatar">{emp_init}</span>
+            <span class="emp-avatar">{_esc(emp_init)}</span>
             <div>
-              <div class="emp-name">{emp_name}</div>
+              <div class="emp-name">{_esc(emp_name)}</div>
             </div>
           </div>
         </td>
-        <td>{exp.get('date','—')}</td>
-        <td>{exp.get('category','—')}</td>
+        <td>{_esc(exp.get('date','—'))}</td>
+        <td>{_esc(exp.get('category','—'))}</td>
         <td><strong>${exp.get('amount',0):.2f}</strong></td>
-        <td>{exp.get('description','—')[:40]}</td>
-        <td><span class="status-badge {status_cls}">{status}</span></td>
+        <td>{_esc(exp.get('description','—')[:40])}</td>
+        <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
       </tr>"""
 
     st.markdown(
