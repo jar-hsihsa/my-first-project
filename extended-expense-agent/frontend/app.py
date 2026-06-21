@@ -53,8 +53,13 @@ CUSTOM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 /* ── Global ──────────────────────────────────────────────── */
-html, body, [class*="st-"] {
-  font-family: 'Inter', sans-serif !important;
+html, body, .stApp {
+  font-family: 'Inter', sans-serif;
+}
+
+/* Hide 'Press Enter to apply' text from text inputs */
+div[data-testid="InputInstructions"] {
+  display: none !important;
 }
 .block-container {
   padding-top: 1rem !important;
@@ -242,6 +247,23 @@ section[data-testid="stSidebar"] .stButton > button:hover {
 }
 .expense-table tr:hover {
   background: #F8FAFC;
+}
+
+/* ── Excel-like Filter ───────────────────────────────────── */
+.excel-filter {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 0.75rem;
+  padding: 4px;
+  margin-top: 6px;
+  border: 1px solid #E2E8F0;
+  border-radius: 4px;
+  font-weight: normal;
+  outline: none;
+}
+.excel-filter:focus {
+  border-color: #3B5BDB;
+  box-shadow: 0 0 0 2px rgba(59,91,219,0.1);
 }
 
 /* ── Employee chip ───────────────────────────────────────── */
@@ -1126,35 +1148,106 @@ if st.session_state.role == "Employee":
   all_my_expenses = pending_expenses + my_expenses
 
   if all_my_expenses:
-    st.markdown(
-      f'<div class="section-title" style="margin-top:2rem;">My Expenses ({len(all_my_expenses)})</div>',
-      unsafe_allow_html=True,
-    )
-    rows_html = ""
+    avail_categories = sorted(list(set(str(e.get("category", "")) for e in all_my_expenses if e.get("category"))))
+    avail_statuses = sorted(list(set(str(e.get("status", "")) for e in all_my_expenses if e.get("status"))))
+    
+    def is_active(*keys):
+      for k in keys:
+        val = st.session_state.get(k)
+        if val is not None and val != "" and val != [] and val != ():
+          return True
+      return False
+
+    def plabel(name, *keys):
+      return f"🟢 {name}" if is_active(*keys) else f"🔽 {name}"
+
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+      st.markdown(f'<div class="section-title" style="margin-top:2rem;">My Expenses</div>', unsafe_allow_html=True)
+    with col_btn:
+      st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
+      if st.button("Clear Filters", key="emp_clear_btn", use_container_width=True):
+        for k in ["emp_f_id", "emp_f_date", "emp_f_cat", "emp_f_min", "emp_f_max", "emp_f_desc", "emp_f_stat"]:
+          if k in st.session_state:
+            del st.session_state[k]
+        st.rerun()
+    
+    # Excel-like Filter Popovers
+    f_col1, f_col2, f_col3, f_col4, f_col5, f_col6 = st.columns([1,1,1,1,2,1])
+    with f_col1:
+      with st.popover(plabel("ID", "emp_f_id"), use_container_width=True):
+        filter_id = st.text_input("Search ID", key="emp_f_id")
+    with f_col2:
+      with st.popover(plabel("Date", "emp_f_date"), use_container_width=True):
+        filter_date = st.date_input("Search Date Range", value=[], key="emp_f_date")
+    with f_col3:
+      with st.popover(plabel("Category", "emp_f_cat"), use_container_width=True):
+        filter_category = st.multiselect("Select Category", options=avail_categories, key="emp_f_cat")
+    with f_col4:
+      with st.popover(plabel("Amount", "emp_f_min", "emp_f_max"), use_container_width=True):
+        filter_min_amt = st.number_input("Min $", min_value=0.0, step=1.0, value=None, key="emp_f_min")
+        filter_max_amt = st.number_input("Max $", min_value=0.0, step=1.0, value=None, key="emp_f_max")
+    with f_col5:
+      with st.popover(plabel("Description", "emp_f_desc"), use_container_width=True):
+        filter_desc = st.text_input("Search Description", key="emp_f_desc")
+    with f_col6:
+      with st.popover(plabel("Status", "emp_f_stat"), use_container_width=True):
+        filter_status = st.multiselect("Select Status", options=avail_statuses, key="emp_f_stat")
+
+    filtered_my_expenses = []
     for exp in all_my_expenses:
       exp_id_raw = exp.get('id', 0)
       exp_id = str(exp_id_raw) if str(exp_id_raw).startswith("PENDING") else f"EX{int(exp_id_raw):04d}"
-      status = exp.get("status", "Approved")
-      status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
-      rows_html += f"""<tr>
-        <td><strong>{_esc(exp_id)}</strong></td>
-        <td>{_esc(exp.get('date','—'))}</td>
-        <td>{_esc(exp.get('category','—'))}</td>
-        <td><strong>${exp.get('amount',0):.2f}</strong></td>
-        <td>{_esc(exp.get('description','—')[:40])}</td>
-        <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
-      </tr>"""
+      if filter_id and filter_id.lower() not in exp_id.lower(): continue
+      if filter_date:
+        import pandas as pd
+        row_dt = pd.to_datetime(exp.get("date", ""), errors="coerce")
+        if pd.notna(row_dt):
+          row_d = row_dt.date()
+          if len(filter_date) == 1 and row_d != filter_date[0]: continue
+          elif len(filter_date) == 2 and not (filter_date[0] <= row_d <= filter_date[1]): continue
+        else:
+          continue
+      if filter_category and exp.get("category") not in filter_category: continue
+      if filter_status and exp.get("status") not in filter_status: continue
+      amt = float(exp.get("amount", 0.0))
+      if filter_min_amt is not None and amt < filter_min_amt: continue
+      if filter_max_amt is not None and amt > filter_max_amt: continue
+      if filter_desc and filter_desc.lower() not in str(exp.get("description", "")).lower(): continue
+      filtered_my_expenses.append(exp)
 
-    st.markdown(
-      f"""<table class="expense-table">
-        <thead><tr>
-          <th>Expense ID</th><th>Date</th>
-          <th>Category</th><th>Amount</th><th>Description</th><th>Status</th>
-        </tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>""",
-      unsafe_allow_html=True,
-    )
+    if filtered_my_expenses:
+      rows_html = ""
+      for exp in filtered_my_expenses:
+        exp_id_raw = exp.get('id', 0)
+        exp_id = str(exp_id_raw) if str(exp_id_raw).startswith("PENDING") else f"EX{int(exp_id_raw):04d}"
+        status = exp.get("status", "Approved")
+        status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
+        rows_html += f"""<tr>
+          <td><strong>{_esc(exp_id)}</strong></td>
+          <td>{_esc(exp.get('date','—'))}</td>
+          <td>{_esc(exp.get('category','—'))}</td>
+          <td><strong>${exp.get('amount',0):.2f}</strong></td>
+          <td>{_esc(exp.get('description','—')[:40])}</td>
+          <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
+        </tr>"""
+
+      st.markdown(
+        f"""<table class="expense-table" style="margin-top: 0.5rem;">
+          <thead><tr>
+            <th>Expense ID</th>
+            <th>Date</th>
+            <th>Category</th>
+            <th>Amount</th>
+            <th>Description</th>
+            <th>Status</th>
+          </tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table>""",
+        unsafe_allow_html=True,
+      )
+    else:
+      st.info("No expenses match the selected filters.")
 
 
 # ╔═══════════════════════════════════════════════════════════╗
@@ -1380,42 +1473,117 @@ elif st.session_state.role == "Admin":
 
   # ── All expenses table (always visible for admin) ────────
   if all_expenses:
-    st.markdown(
-      f'<div class="section-title" style="margin-top:1rem;">All Expenses ({len(all_expenses)})</div>',
-      unsafe_allow_html=True,
-    )
+    avail_categories = sorted(list(set(str(e.get("category", "")) for e in all_expenses if e.get("category"))))
+    avail_statuses = sorted(list(set(str(e.get("status", "")) for e in all_expenses if e.get("status"))))
+    
+    def is_active(*keys):
+      for k in keys:
+        val = st.session_state.get(k)
+        if val is not None and val != "" and val != [] and val != ():
+          return True
+      return False
 
-    rows_html = ""
+    def plabel(name, *keys):
+      return f"🟢 {name}" if is_active(*keys) else f"🔽 {name}"
+
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+      st.markdown(f'<div class="section-title" style="margin-top:1rem;">All Expenses</div>', unsafe_allow_html=True)
+    with col_btn:
+      st.markdown("<div style='margin-top:1rem;'></div>", unsafe_allow_html=True)
+      if st.button("Clear Filters", key="adm_clear_btn", use_container_width=True):
+        for k in ["adm_f_id", "adm_f_emp", "adm_f_date", "adm_f_cat", "adm_f_min", "adm_f_max", "adm_f_desc", "adm_f_stat"]:
+          if k in st.session_state:
+            del st.session_state[k]
+        st.rerun()
+    
+    # Excel-like Filter Popovers
+    f_col1, f_col2, f_col3, f_col4, f_col5, f_col6, f_col7 = st.columns([1,1,1,1,1,2,1])
+    with f_col1:
+      with st.popover(plabel("ID", "adm_f_id"), use_container_width=True):
+        filter_id = st.text_input("Search ID", key="adm_f_id")
+    with f_col2:
+      with st.popover(plabel("Emp", "adm_f_emp"), use_container_width=True):
+        filter_emp = st.text_input("Search Employee", key="adm_f_emp")
+    with f_col3:
+      with st.popover(plabel("Date", "adm_f_date"), use_container_width=True):
+        filter_date = st.date_input("Search Date Range", value=[], key="adm_f_date")
+    with f_col4:
+      with st.popover(plabel("Category", "adm_f_cat"), use_container_width=True):
+        filter_category = st.multiselect("Select Category", options=avail_categories, key="adm_f_cat")
+    with f_col5:
+      with st.popover(plabel("Amount", "adm_f_min", "adm_f_max"), use_container_width=True):
+        filter_min_amt = st.number_input("Min $", min_value=0.0, step=1.0, value=None, key="adm_f_min")
+        filter_max_amt = st.number_input("Max $", min_value=0.0, step=1.0, value=None, key="adm_f_max")
+    with f_col6:
+      with st.popover(plabel("Description", "adm_f_desc"), use_container_width=True):
+        filter_desc = st.text_input("Search Description", key="adm_f_desc")
+    with f_col7:
+      with st.popover(plabel("Status", "adm_f_stat"), use_container_width=True):
+        filter_status = st.multiselect("Select Status", options=avail_statuses, key="adm_f_stat")
+
+    filtered_all_expenses = []
     for exp in all_expenses:
       exp_id = f"EX{exp.get('id', 0):04d}"
-      emp_init = _initials(exp.get("submitter", ""))
       emp_name = _display_name(exp.get("submitter", ""))
-      status = exp.get("status", "Approved")
-      status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
-      rows_html += f"""<tr>
-        <td><strong>{_esc(exp_id)}</strong></td>
-        <td>
-          <div class="emp-chip">
-            <span class="emp-avatar">{_esc(emp_init)}</span>
-            <div>
-              <div class="emp-name">{_esc(emp_name)}</div>
-            </div>
-          </div>
-        </td>
-        <td>{_esc(exp.get('date','—'))}</td>
-        <td>{_esc(exp.get('category','—'))}</td>
-        <td><strong>${exp.get('amount',0):.2f}</strong></td>
-        <td>{_esc(exp.get('description','—')[:40])}</td>
-        <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
-      </tr>"""
+      emp_email = exp.get("submitter", "")
+      
+      if filter_id and filter_id.lower() not in exp_id.lower(): continue
+      if filter_emp and (filter_emp.lower() not in emp_name.lower() and filter_emp.lower() not in emp_email.lower()): continue
+      if filter_date:
+        import pandas as pd
+        row_dt = pd.to_datetime(exp.get("date", ""), errors="coerce")
+        if pd.notna(row_dt):
+          row_d = row_dt.date()
+          if len(filter_date) == 1 and row_d != filter_date[0]: continue
+          elif len(filter_date) == 2 and not (filter_date[0] <= row_d <= filter_date[1]): continue
+        else:
+          continue
+      if filter_category and exp.get("category") not in filter_category: continue
+      if filter_status and exp.get("status") not in filter_status: continue
+      amt = float(exp.get("amount", 0.0))
+      if filter_min_amt is not None and amt < filter_min_amt: continue
+      if filter_max_amt is not None and amt > filter_max_amt: continue
+      if filter_desc and filter_desc.lower() not in str(exp.get("description", "")).lower(): continue
+      filtered_all_expenses.append(exp)
 
-    st.markdown(
-      f"""<table class="expense-table">
-        <thead><tr>
-          <th>Expense ID</th><th>Employee</th><th>Date</th>
-          <th>Category</th><th>Amount</th><th>Description</th><th>Status</th>
-        </tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>""",
-      unsafe_allow_html=True,
-    )
+    if filtered_all_expenses:
+      rows_html = ""
+      for exp in filtered_all_expenses:
+        exp_id = f"EX{exp.get('id', 0):04d}"
+        emp_init = _initials(exp.get("submitter", ""))
+        emp_name = _display_name(exp.get("submitter", ""))
+        status = exp.get("status", "Approved")
+        status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
+        rows_html += f"""<tr>
+          <td><strong>{_esc(exp_id)}</strong></td>
+          <td>
+            <div class="emp-chip">
+              <span class="emp-avatar">{_esc(emp_init)}</span>
+              <div>
+                <div class="emp-name">{_esc(emp_name)}</div>
+              </div>
+            </div>
+          </td>
+          <td>{_esc(exp.get('date','—'))}</td>
+          <td>{_esc(exp.get('category','—'))}</td>
+          <td><strong>${exp.get('amount',0):.2f}</strong></td>
+          <td>{_esc(exp.get('description','—')[:40])}</td>
+          <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
+        </tr>"""
+
+      st.markdown(
+        f"""<table class="expense-table" style="margin-top: 0.5rem;">
+          <thead><tr>
+            <th>Expense ID</th>
+            <th>Employee</th>
+            <th>Date</th>
+            <th>Category</th>
+            <th>Amount</th>
+            <th>Description</th>
+            <th>Status</th>
+          </tr></thead>
+          <tbody>{rows_html}</tbody>
+        </table>""",
+        unsafe_allow_html=True,
+      )
