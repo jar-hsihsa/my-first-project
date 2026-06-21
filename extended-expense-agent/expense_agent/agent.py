@@ -374,7 +374,7 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     if has_violations:
         # redacted now contains ALL violations e.g. ["SSN", "Credit Card", "Prompt Injection"]
         risk_msg = (
-            f"CRITICAL RISK: Violations detected — {', '.join(redacted)}. "
+            "CRITICAL RISK: Security policy violation detected. "
             "Escalated for human review."
         )
 
@@ -568,15 +568,8 @@ def outcome_node(ctx: Context, node_input: Any):
     if redacted:
         content_text += f"- **Redacted Info**: {', '.join(redacted)}\n"
     if is_security_event:
-        # Build security label directly from state flags — not from string parsing
-        if is_injection and has_pii:
-            sec_label = f"⚠️ CRITICAL RISK: PII Detected ({', '.join(redacted)}) AND Prompt Injection Attempted"
-        elif is_injection:
-            sec_label = "⚠️ CRITICAL RISK: Prompt Injection Attempted"
-        elif has_pii:
-            sec_label = f"⚠️ CRITICAL RISK: PII Data Detected ({', '.join(redacted)})"
-        else:
-            sec_label = "⚠️ FLAGGED SECURITY EVENT"
+        # Build security label directly from state flags — generic for security
+        sec_label = "⚠️ CRITICAL RISK: Request flagged for manual review due to security policy."
         content_text += f"- **Security Status**: {sec_label}\n"
     content_text += f"- **Risk Assessment**: {risk}\n"
     
