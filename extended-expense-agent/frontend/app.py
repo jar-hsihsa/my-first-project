@@ -57,6 +57,18 @@ html, body, .stApp {
   font-family: 'Inter', sans-serif;
 }
 
+[data-testid="stAppViewContainer"] {
+  background: linear-gradient(-45deg, #F0F9FF, #E0E7FF, #F3E8FF, #FDF4FF);
+  background-size: 400% 400%;
+  animation: loginBackground 15s ease infinite;
+}
+
+@keyframes loginBackground {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
 /* Hide 'Press Enter to apply' text from text inputs */
 div[data-testid="InputInstructions"] {
   display: none !important;
@@ -806,21 +818,6 @@ if not st.session_state.logged_in:
     st.markdown(
       """
       <style>
-      /* Full screen animated gradient background exclusively for the login page */
-      [data-testid="stAppViewContainer"] {
-        background: linear-gradient(-45deg, #F0F9FF, #E0E7FF, #F3E8FF, #FDF4FF);
-        background-size: 400% 400%;
-        animation: loginBackground 15s ease infinite;
-      }
-      [data-testid="stHeader"] {
-        background: transparent !important;
-      }
-      @keyframes loginBackground {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-      }
-
       .premium-login-card {
         background: rgba(255, 255, 255, 0.65);
         backdrop-filter: blur(24px);
