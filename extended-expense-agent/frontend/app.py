@@ -1304,16 +1304,16 @@ if st.session_state.role == "Employee":
 
       st.markdown(
         f"""<table class="expense-table" style="margin-top: 0.5rem;">
-          <thead><tr>
-            <th>Expense ID</th>
-            <th>Date</th>
-            <th>Category</th>
-            <th>Amount</th>
-            <th>Description</th>
-            <th>Status</th>
-          </tr></thead>
-          <tbody>{rows_html}</tbody>
-        </table>""",
+  <thead><tr>
+    <th>Expense ID</th>
+    <th>Date</th>
+    <th>Category</th>
+    <th>Amount</th>
+    <th>Description</th>
+    <th>Status</th>
+  </tr></thead>
+  <tbody>{rows_html}</tbody>
+</table>""",
         unsafe_allow_html=True,
       )
     else:
@@ -1376,29 +1376,29 @@ elif st.session_state.role == "Admin":
         # Table row for the pending item
         st.markdown(
           f"""<table class="expense-table">
-            <thead><tr>
-              <th>Expense ID</th><th>Employee</th><th>Date</th>
-              <th>Amount</th><th>Category</th><th>Status</th>
-            </tr></thead>
-            <tbody>
-            <tr class="row-selected">
-              <td><strong>{_esc(exp_id)}</strong></td>
-              <td>
-                <div class="emp-chip">
-                  <span class="emp-avatar">{_esc(sub_initials)}</span>
-                  <div>
-                    <div class="emp-name">{_esc(sub_display)}</div>
-                    <div class="emp-role">Employee</div>
-                  </div>
-                </div>
-              </td>
-              <td>{_esc(exp_date)}</td>
-              <td><strong>${_esc(amount_str)}</strong></td>
-              <td>{_esc(exp_category)}</td>
-              <td><span class="status-badge status-awaiting">Awaiting Approval</span></td>
-            </tr>
-            </tbody>
-          </table>""",
+  <thead><tr>
+    <th>Expense ID</th><th>Employee</th><th>Date</th>
+    <th>Amount</th><th>Category</th><th>Status</th>
+  </tr></thead>
+  <tbody>
+  <tr class="row-selected">
+    <td><strong>{_esc(exp_id)}</strong></td>
+    <td>
+      <div class="emp-chip">
+        <span class="emp-avatar">{_esc(sub_initials)}</span>
+        <div>
+          <div class="emp-name">{_esc(sub_display)}</div>
+          <div class="emp-role">Employee</div>
+        </div>
+      </div>
+    </td>
+    <td>{_esc(exp_date)}</td>
+    <td><strong>${_esc(amount_str)}</strong></td>
+    <td>{_esc(exp_category)}</td>
+    <td><span class="status-badge status-awaiting">Awaiting Approval</span></td>
+  </tr>
+  </tbody>
+</table>""",
           unsafe_allow_html=True,
         )
   
@@ -1414,27 +1414,24 @@ elif st.session_state.role == "Admin":
         # Detail card
         st.markdown(
           f"""<div class="detail-card">
-            <div class="detail-header">
-              <h3>Expense Details: {_esc(exp_id)} ({_esc(sub_display)})</h3>
-            </div>
-            {f'<div style="margin-bottom:0.75rem;">{flags_html}</div>' if flags_html else ''}
-            <div class="detail-grid">
-              <div class="detail-label">Date:</div>
-              <div class="detail-value">{_esc(exp_date)}</div>
-              <div class="detail-label">Amount:</div>
-              <div class="detail-value"><strong>${_esc(amount_str)}</strong></div>
-              <div class="detail-label">Category:</div>
-              <div class="detail-value">{_esc(exp_category)}</div>
-              <div class="detail-label">Purpose:</div>
-              <div class="detail-value">{_esc(description_str)}</div>
-            </div>
-          </div>""",
+  <div class="detail-header">
+    <h3>Expense Details: {_esc(exp_id)} ({_esc(sub_display)})</h3>
+  </div>
+  {f'<div style="margin-bottom:0.75rem;">{flags_html}</div>' if flags_html else ''}
+  <div class="detail-grid">
+    <div class="detail-label">Date:</div>
+    <div class="detail-value">{_esc(exp_date)}</div>
+    <div class="detail-label">Amount:</div>
+    <div class="detail-value"><strong>${_esc(amount_str)}</strong></div>
+    <div class="detail-label">Category:</div>
+    <div class="detail-value">{_esc(exp_category)}</div>
+    <div class="detail-label">Purpose:</div>
+    <div class="detail-value">{_esc(description_str)}</div>
+  </div>
+</div>""",
           unsafe_allow_html=True,
         )
-  
-        raw_json_str = record.get("raw_json", "{}")
-        with st.expander(" Raw JSON Input", expanded=False):
-          st.code(raw_json_str, language="json")
+
           
         with st.expander(" AI Insight Summary", expanded=True):
           st.markdown(f"**Risk Assessment:** {risk_str}")
@@ -1481,10 +1478,18 @@ elif st.session_state.role == "Admin":
                     }
                   }]
                 }
-                events = run_agent(payload, specific_session_id=session_id)
-                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
-                delete_pending_approval(db_id)
-                st.rerun()
+                try:
+                  events = run_agent(payload, specific_session_id=session_id)
+                  process_events(events, run_session_id=session_id, submitter_email=submitter_email)
+                  delete_pending_approval(db_id)
+                  st.rerun()
+                except Exception as e:
+                  if "Session not found" in str(e):
+                    st.toast("Session expired (server restarted). Removing stale request.", icon="⚠️")
+                    delete_pending_approval(db_id)
+                    st.rerun()
+                  else:
+                    st.error(f"Error resuming workflow: {e}")
         with col2:
           if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
             with st.spinner("Resuming workflow to approve..."):
@@ -1498,10 +1503,18 @@ elif st.session_state.role == "Admin":
                   }
                 }]
               }
-              events = run_agent(payload, specific_session_id=session_id)
-              process_events(events, run_session_id=session_id, submitter_email=submitter_email)
-              delete_pending_approval(db_id)
-              st.rerun()
+              try:
+                events = run_agent(payload, specific_session_id=session_id)
+                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
+                delete_pending_approval(db_id)
+                st.rerun()
+              except Exception as e:
+                if "Session not found" in str(e):
+                  st.toast("Session expired (server restarted). Removing stale request.", icon="⚠️")
+                  delete_pending_approval(db_id)
+                  st.rerun()
+                else:
+                  st.error(f"Error resuming workflow: {e}")
   
     else:
       # ── No pending — show last result + all expenses ─────
@@ -1516,23 +1529,23 @@ elif st.session_state.role == "Admin":
           )
           st.markdown(
             f"""<div class="detail-card">
-              <div class="detail-header">
-                <h3>Last Reviewed Expense</h3>
-                <span class="status-badge {status_cls}">{_esc(decision)}</span>
-              </div>
-              <div class="detail-grid">
-                <div class="detail-label">Amount:</div>
-                <div class="detail-value"><strong>${exp.get('amount',0):.2f}</strong></div>
-                <div class="detail-label">Submitter:</div>
-                <div class="detail-value">{_esc(exp.get('submitter','—'))}</div>
-                <div class="detail-label">Category:</div>
-                <div class="detail-value">{_esc(exp.get('category','—'))}</div>
-                <div class="detail-label">Purpose:</div>
-                <div class="detail-value">{_esc(exp.get('description','—'))}</div>
-                <div class="detail-label">Reason:</div>
-                <div class="detail-value">{_esc(reason)}</div>
-              </div>
-            </div>""",
+  <div class="detail-header">
+    <h3>Last Reviewed Expense</h3>
+    <span class="status-badge {status_cls}">{_esc(decision)}</span>
+  </div>
+  <div class="detail-grid">
+    <div class="detail-label">Amount:</div>
+    <div class="detail-value"><strong>${exp.get('amount',0):.2f}</strong></div>
+    <div class="detail-label">Submitter:</div>
+    <div class="detail-value">{_esc(exp.get('submitter','—'))}</div>
+    <div class="detail-label">Category:</div>
+    <div class="detail-value">{_esc(exp.get('category','—'))}</div>
+    <div class="detail-label">Purpose:</div>
+    <div class="detail-value">{_esc(exp.get('description','—'))}</div>
+    <div class="detail-label">Reason:</div>
+    <div class="detail-value">{_esc(reason)}</div>
+  </div>
+</div>""",
             unsafe_allow_html=True,
           )
           st.markdown("---")
