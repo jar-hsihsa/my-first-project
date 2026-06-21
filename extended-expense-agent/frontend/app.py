@@ -1478,10 +1478,18 @@ elif st.session_state.role == "Admin":
                     }
                   }]
                 }
-                events = run_agent(payload, specific_session_id=session_id)
-                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
-                delete_pending_approval(db_id)
-                st.rerun()
+                try:
+                  events = run_agent(payload, specific_session_id=session_id)
+                  process_events(events, run_session_id=session_id, submitter_email=submitter_email)
+                  delete_pending_approval(db_id)
+                  st.rerun()
+                except Exception as e:
+                  if "Session not found" in str(e):
+                    st.toast("Session expired (server restarted). Removing stale request.", icon="⚠️")
+                    delete_pending_approval(db_id)
+                    st.rerun()
+                  else:
+                    st.error(f"Error resuming workflow: {e}")
         with col2:
           if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
             with st.spinner("Resuming workflow to approve..."):
@@ -1495,10 +1503,18 @@ elif st.session_state.role == "Admin":
                   }
                 }]
               }
-              events = run_agent(payload, specific_session_id=session_id)
-              process_events(events, run_session_id=session_id, submitter_email=submitter_email)
-              delete_pending_approval(db_id)
-              st.rerun()
+              try:
+                events = run_agent(payload, specific_session_id=session_id)
+                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
+                delete_pending_approval(db_id)
+                st.rerun()
+              except Exception as e:
+                if "Session not found" in str(e):
+                  st.toast("Session expired (server restarted). Removing stale request.", icon="⚠️")
+                  delete_pending_approval(db_id)
+                  st.rerun()
+                else:
+                  st.error(f"Error resuming workflow: {e}")
   
     else:
       # ── No pending — show last result + all expenses ─────
