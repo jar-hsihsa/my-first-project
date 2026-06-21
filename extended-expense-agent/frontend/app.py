@@ -804,15 +804,88 @@ if not st.session_state.logged_in:
   col_l, col_c, col_r = st.columns([1, 1.5, 1])
   with col_c:
     st.markdown(
-      """<div style="text-align:center; margin-top:3rem;">
-        <div style="display:inline-flex;align-items:center;justify-content:center;
-          width:56px;height:56px;background:linear-gradient(135deg,#2563EB,#7C3AED);
-          border-radius:14px;margin-bottom:1rem;">
-          <span style="font-size:1.5rem;color:#FFF;font-weight:800;font-family:Inter,sans-serif;">A</span>
+      """
+      <style>
+      /* Full screen animated gradient background exclusively for the login page */
+      [data-testid="stAppViewContainer"] {
+        background: linear-gradient(-45deg, #F0F9FF, #E0E7FF, #F3E8FF, #FDF4FF);
+        background-size: 400% 400%;
+        animation: loginBackground 15s ease infinite;
+      }
+      [data-testid="stHeader"] {
+        background: transparent !important;
+      }
+      @keyframes loginBackground {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+
+      .premium-login-card {
+        background: rgba(255, 255, 255, 0.65);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border: 1px solid rgba(255, 255, 255, 0.8);
+        box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.1), 0 10px 20px -5px rgba(0, 0, 0, 0.05);
+        border-radius: 28px;
+        padding: 3.5rem 2.5rem;
+        text-align: center;
+        margin-top: 3rem;
+        margin-bottom: 2rem;
+        transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .premium-login-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.15), 0 20px 30px -10px rgba(0, 0, 0, 0.1);
+      }
+      .logo-container {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 80px;
+        height: 80px;
+        background: linear-gradient(135deg, #3B82F6, #8B5CF6, #EC4899);
+        background-size: 200% 200%;
+        animation: gradientShift 5s ease infinite;
+        border-radius: 22px;
+        margin-bottom: 1.75rem;
+        box-shadow: 0 10px 25px rgba(139, 92, 246, 0.4);
+      }
+      @keyframes gradientShift {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+      .logo-text {
+        font-size: 2.2rem;
+        color: #FFFFFF;
+        font-weight: 800;
+        font-family: 'Inter', sans-serif;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      }
+      .app-title {
+        color: #0F172A;
+        font-size: 2.25rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        margin-bottom: 0.5rem;
+      }
+      .app-subtitle {
+        color: #64748B;
+        font-size: 1.1rem;
+        font-weight: 500;
+        margin-bottom: 0;
+      }
+      </style>
+      
+      <div class="premium-login-card">
+        <div class="logo-container">
+          <span class="logo-text">A</span>
         </div>
-        <h2 style="color:#1E293B;margin-bottom:0.25rem;">Acme Corp</h2>
-        <p style="color:#94A3B8;font-size:0.92rem;margin-bottom:2rem;">Sign in to the Expense Approval Portal</p>
-      </div>""",
+        <h2 class="app-title">Acme Corp</h2>
+        <p class="app-subtitle">Sign in to the Expense Approval Portal</p>
+      </div>
+      """,
       unsafe_allow_html=True,
     )
 
