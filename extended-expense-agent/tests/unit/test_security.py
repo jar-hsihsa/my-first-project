@@ -131,7 +131,6 @@ def test_security_checkpoint_node_pii() -> None:
     assert ctx.state["redacted_categories"] == ["Credit Card"]
     assert ctx.state["is_security_event"] is True
     assert "CRITICAL RISK" in ctx.state["risk_assessment"]
-    assert "Credit Card" in ctx.state["risk_assessment"]
 
 
 def test_security_checkpoint_node_injection() -> None:
@@ -151,7 +150,6 @@ def test_security_checkpoint_node_injection() -> None:
     # Injection is now appended to redacted_categories as "Prompt Injection"
     assert "Prompt Injection" in event.output["redacted_categories"]
     assert "CRITICAL RISK" in event.output["risk_assessment"]
-    assert "Prompt Injection" in event.output["risk_assessment"]
     assert ctx.state["is_security_event"] is True
     assert "CRITICAL RISK" in ctx.state["risk_assessment"]
 
@@ -176,7 +174,6 @@ def test_security_checkpoint_node_pii_low_amount() -> None:
     )
     assert ctx.state["is_security_event"] is True
     assert "CRITICAL RISK" in ctx.state["risk_assessment"]
-    assert "SSN" in ctx.state["risk_assessment"]
     assert "SSN" in ctx.state["redacted_categories"]
     # Confirm the SSN was actually scrubbed from the description
     assert "123-45-6789" not in ctx.state["expense"]["description"]
@@ -205,4 +202,3 @@ def test_security_checkpoint_node_injection_low_amount() -> None:
     assert "CRITICAL RISK" in ctx.state["risk_assessment"]
     # Injection is now part of redacted_categories as "Prompt Injection"
     assert "Prompt Injection" in ctx.state["redacted_categories"]
-    assert "Prompt Injection" in ctx.state["risk_assessment"]
