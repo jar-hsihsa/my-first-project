@@ -43,7 +43,18 @@ st.set_page_config(
   layout="wide",
 )
 
+import base64
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "acme_logo.png")
+
+def get_base64_image(image_path):
+    try:
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode("utf-8")
+    except Exception:
+        return ""
+
+logo_base64 = get_base64_image(LOGO_PATH)
+logo_img_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else ""
 
 # ──────────────────────────────────────────────────────────────
 # Custom CSS — matching the CorpTrack reference design
@@ -146,8 +157,8 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   padding: 0.5rem 0.25rem 1rem;
 }
 .sidebar-logo-icon {
-  width: 32px;
-  height: 32px;
+  width: 100px;
+  height: 30px;
   background: linear-gradient(135deg, #2563EB, #7C3AED);
   border-radius: 8px;
   display: flex;
@@ -836,16 +847,16 @@ if not st.session_state.logged_in:
         box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.15), 0 20px 30px -10px rgba(0, 0, 0, 0.1);
       }
       .logo-container {
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
-        width: 80px;
-        height: 80px;
+        width: 250px;
+        height: 70px;
         background: linear-gradient(135deg, #3B82F6, #8B5CF6, #EC4899);
         background-size: 200% 200%;
         animation: gradientShift 5s ease infinite;
         border-radius: 22px;
-        margin-bottom: 1.75rem;
+        margin: 0 auto 1.5rem auto;
         box-shadow: 0 10px 25px rgba(139, 92, 246, 0.4);
       }
       @keyframes gradientShift {
@@ -877,9 +888,8 @@ if not st.session_state.logged_in:
       
       <div class="premium-login-card">
         <div class="logo-container">
-          <span class="logo-text">A</span>
+          <img src=\"""" + logo_img_src + """\" alt="AcmeCorp Logo" style="width: 100%; height: 100%; object-fit: contain;" />
         </div>
-        <h2 class="app-title">Acme Corp</h2>
         <p class="app-subtitle">Sign in to the Expense Approval Portal</p>
       </div>
       """,
@@ -955,8 +965,8 @@ with st.sidebar:
   # Logo
   st.markdown(
     """<div class="sidebar-logo">
-      <div class="sidebar-logo-icon"><span style="font-weight:800;font-family:Inter,sans-serif;">A</span></div>
-      <div>
+      <div class="sidebar-logo-icon"><img src=\"""" + logo_img_src + """\" alt="AcmeCorp Logo" style="width: 100%; height: 100%; object-fit: contain;"/></div>
+      <div style="display: flex; flex-direction: column; justify-content: center; margin-top: 2px;">
         <div class="sidebar-logo-text">Acme Corp</div>
         <div class="sidebar-logo-sub">Expenses</div>
       </div>
