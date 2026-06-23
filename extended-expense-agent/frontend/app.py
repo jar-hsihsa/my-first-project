@@ -45,6 +45,16 @@ st.set_page_config(
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "acme_logo.png")
 
+def get_base64_image(image_path):
+    try:
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode("utf-8")
+    except Exception:
+        return ""
+
+logo_base64 = get_base64_image(LOGO_PATH)
+logo_img_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else ""
+
 # ──────────────────────────────────────────────────────────────
 # Custom CSS — matching the CorpTrack reference design
 # ──────────────────────────────────────────────────────────────
@@ -146,15 +156,14 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   padding: 0.5rem 0.25rem 1rem;
 }
 .sidebar-logo-icon {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, #2563EB, #7C3AED);
+  width: 100px;
+  height: 30px;
   border-radius: 8px;
+  background: linear-gradient(135deg, #3B82F6, #8B5CF6);
+  color: white;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
-  color: #FFF !important;
 }
 .sidebar-logo-text {
   font-weight: 700;
@@ -491,18 +500,9 @@ footer {visibility: hidden;}
   display: none !important;
 }
 
-/* Fix overlapping text in file uploader button */
-[data-testid="stFileUploaderDropzone"] button {
-  color: transparent !important;
-  position: relative;
-}
-[data-testid="stFileUploaderDropzone"] button::after {
-  content: "Browse files" !important;
-  color: #334155 !important;
-  position: absolute;
-  left: 0;
-  right: 0;
-  text-align: center;
+/* Ensure file uploader button icon is cleanly hidden if necessary, relying on native text */
+[data-testid="stFileUploaderDropzone"] button svg {
+  display: none !important;
 }
 
 /* Fix expander arrow text bleed when material font fails */
@@ -523,10 +523,411 @@ footer {visibility: hidden;}
   font-size: 0.8rem;
   margin-right: 8px;
 }
+
+/* ── Dark Mode Overrides ─────────────────────────────────── */
+body[data-theme="dark"] [data-testid="stAppViewContainer"] {
+  background: linear-gradient(-45deg, #0f172a, #1e293b, #0f172a, #020617) !important;
+}
+body[data-theme="dark"] .stMarkdown, body[data-theme="dark"] .stText, body[data-theme="dark"] p, body[data-theme="dark"] h1, body[data-theme="dark"] h2, body[data-theme="dark"] h3 {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .expense-table, body[data-theme="dark"] .detail-card, body[data-theme="dark"] .form-card, body[data-theme="dark"] .receipt-preview-box {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] .expense-table th {
+  background: #0f172a !important;
+  color: #f8fafc !important;
+  border-bottom-color: #334155 !important;
+}
+body[data-theme="dark"] .expense-table td {
+  color: #e2e8f0 !important;
+  border-bottom-color: #334155 !important;
+}
+body[data-theme="dark"] .expense-table tr:hover {
+  background: #334155 !important;
+}
+body[data-theme="dark"] .expense-table tr.row-selected {
+  background: #1e3a8a !important;
+  border-left: 3px solid #60a5fa !important;
+}
+body[data-theme="dark"] .detail-header h3, body[data-theme="dark"] .detail-value, body[data-theme="dark"] .emp-name {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .detail-label, body[data-theme="dark"] .emp-role, body[data-theme="dark"] .receipt-meta {
+  color: #94a3b8 !important;
+}
+body[data-theme="dark"] .excel-filter {
+  background: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] .top-header h1 {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .top-header-right {
+  color: #cbd5e1 !important;
+}
+body[data-theme="dark"] .top-header {
+  border-bottom-color: #334155 !important;
+}
+body[data-theme="dark"] .section-title {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .emp-avatar {
+  background: #1e3a8a !important;
+  color: #93c5fd !important;
+}
+body[data-theme="dark"] .receipt-title {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .receipt-info {
+  color: #cbd5e1 !important;
+}
+body[data-theme="dark"] .status-awaiting {
+  background: rgba(217, 119, 6, 0.2) !important;
+  color: #fcd34d !important;
+  border-color: rgba(217, 119, 6, 0.5) !important;
+}
+body[data-theme="dark"] .status-approved {
+  background: rgba(5, 150, 105, 0.2) !important;
+  color: #6ee7b7 !important;
+  border-color: rgba(5, 150, 105, 0.5) !important;
+}
+body[data-theme="dark"] .status-auto-approved {
+  background: rgba(59, 91, 219, 0.2) !important;
+  color: #93c5fd !important;
+  border-color: rgba(59, 91, 219, 0.5) !important;
+}
+body[data-theme="dark"] .status-rejected {
+  background: rgba(220, 38, 38, 0.2) !important;
+  color: #fca5a5 !important;
+  border-color: rgba(220, 38, 38, 0.5) !important;
+}
+body[data-theme="dark"] .history-row {
+  border-bottom-color: #334155 !important;
+}
+body[data-theme="dark"] .hr-desc, body[data-theme="dark"] .hr-amount {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .hr-cat, body[data-theme="dark"] .hr-date {
+  color: #94a3b8 !important;
+}
+
+/* Dark Mode Form Inputs and Buttons */
+body[data-theme="dark"] .stButton > button,
+body[data-theme="dark"] .stFormSubmitButton > button,
+body[data-theme="dark"] .stDownloadButton > button {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border-color: #475569 !important;
+}
+body[data-theme="dark"] .stButton > button:hover,
+body[data-theme="dark"] .stFormSubmitButton > button:hover,
+body[data-theme="dark"] .stDownloadButton > button:hover {
+  background-color: #334155 !important;
+  border-color: #94a3b8 !important;
+  color: #ffffff !important;
+}
+/* Ensure primary buttons retain their primary color but with readable text */
+body[data-theme="dark"] button[data-testid="baseButton-primary"] {
+  background-color: #2563eb !important;
+  color: #ffffff !important;
+  border-color: #2563eb !important;
+}
+body[data-theme="dark"] button[data-testid="baseButton-primary"]:hover {
+  background-color: #1d4ed8 !important;
+  border-color: #1d4ed8 !important;
+}
+
+/* Comprehensive Dark Mode Overrides for Streamlit Components */
+
+/* Fix ALL Secondary Buttons, including Popover Buttons (Excel-like Filters) */
+body[data-theme="dark"] button[kind="secondary"],
+body[data-theme="dark"] button[data-testid="baseButton-secondary"],
+body[data-theme="dark"] [data-testid="stPopover"] button,
+body[data-theme="dark"] .stPopover button,
+body[data-theme="dark"] div[data-testid="stPopover"] > div > button {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] button[kind="secondary"] *,
+body[data-theme="dark"] button[data-testid="baseButton-secondary"] *,
+body[data-theme="dark"] [data-testid="stPopover"] button *,
+body[data-theme="dark"] .stPopover button * {
+  color: #f8fafc !important;
+  background-color: transparent !important;
+}
+body[data-theme="dark"] button[kind="secondary"]:hover,
+body[data-theme="dark"] button[data-testid="baseButton-secondary"]:hover,
+body[data-theme="dark"] [data-testid="stPopover"] button:hover,
+body[data-theme="dark"] .stPopover button:hover {
+  background-color: #334155 !important;
+  border-color: #475569 !important;
+}
+
+body[data-theme="dark"] [data-testid="stPopoverBody"],
+body[data-theme="dark"] [data-testid="stPopoverBody"] > div,
+body[data-theme="dark"] div[data-baseweb="popover"] > div {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stPopoverBody"] * {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stExpander"],
+body[data-theme="dark"] [data-testid="stExpander"] > details,
+body[data-theme="dark"] [data-testid="stExpander"] > details > summary,
+body[data-theme="dark"] [data-testid="stExpanderDetails"] {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] .stExpander summary p {
+  color: #f8fafc !important;
+}
+
+/* Fix File Uploader Dropzone and Button */
+body[data-theme="dark"] [data-testid="stFileUploaderDropzone"] {
+  background-color: #0f172a !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] [data-testid="stFileUploaderDropzone"] button {
+  background-color: #1e293b !important;
+  border-color: #475569 !important;
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stFileUploaderDropzone"] button * {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stFileUploaderDropzone"] div,
+body[data-theme="dark"] [data-testid="stFileUploaderDropzone"] span,
+body[data-theme="dark"] [data-testid="stFileUploaderDropzone"] small {
+  color: #94a3b8 !important;
+}
+body[data-theme="dark"] [data-testid="stAlert"],
+body[data-theme="dark"] [data-testid="stAlert"] > div,
+body[data-theme="dark"] [data-testid="stAlert"] > div > div {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stAlert"] * {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] [data-baseweb="tag"] {
+  background-color: #1e3a8a !important;
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .stMultiSelect span {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .stMultiSelect div[data-baseweb="select"] ul {
+  background-color: #1e293b !important;
+}
+body[data-theme="dark"] .stMultiSelect div[data-baseweb="select"] li {
+  color: #f8fafc !important;
+}
+
+/* Fix Calendar Popover - Use CSS filter inversion to preserve native contrast ratios perfectly */
+body[data-theme="dark"] [data-baseweb="calendar"],
+body[data-theme="dark"] div:has(> [data-baseweb="calendar"]) {
+  filter: invert(0.85) hue-rotate(180deg) brightness(1.2) contrast(1.1) !important;
+}
+/* Ensure the popover wrapper doesn't double-apply our dark theme backgrounds before inversion */
+body[data-theme="dark"] div[data-baseweb="popover"]:has([data-baseweb="calendar"]) > div {
+  background-color: transparent !important;
+}
+body[data-theme="dark"] [data-testid="stForm"] {
+  background-color: #1e293b !important;
+  border-color: #334155 !important;
+}
+body[data-theme="dark"] .expense-table td strong, body[data-theme="dark"] .detail-value strong {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] [data-testid="stMarkdownContainer"] {
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .stTextInput input,
+body[data-theme="dark"] .stNumberInput input,
+body[data-theme="dark"] .stSelectbox div[data-baseweb="select"] > div,
+body[data-theme="dark"] .stTextArea textarea,
+body[data-theme="dark"] .stDateInput input {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  caret-color: #f8fafc !important;
+}
+/* Fix Choose Date Range placeholder visibility robustly */
+body[data-theme="dark"] .stDateInput [data-baseweb="input"] *,
+body[data-theme="dark"] .stDateInput input,
+body[data-theme="dark"] .stDateInput input::placeholder {
+  color: #000000 !important;
+  -webkit-text-fill-color: #000000 !important;
+  opacity: 1 !important;
+}
+/* Fix invisible dropdown arrows in Selectbox, MultiSelect, and DateInput */
+body[data-theme="dark"] .stSelectbox svg,
+body[data-theme="dark"] .stSelectbox [data-testid="stIconMaterial"],
+body[data-theme="dark"] .stMultiSelect svg,
+body[data-theme="dark"] .stMultiSelect [data-testid="stIconMaterial"],
+body[data-theme="dark"] .stDateInput svg,
+body[data-theme="dark"] .stDateInput [data-testid="stIconMaterial"] {
+  fill: #f8fafc !important;
+  color: #f8fafc !important;
+}
+/* Fix Number Input Step Buttons (+/-) */
+body[data-theme="dark"] .stNumberInput button {
+  background-color: transparent !important;
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .stNumberInput button svg,
+body[data-theme="dark"] .stNumberInput button [data-testid="stIconMaterial"] {
+  fill: #f8fafc !important;
+  color: #f8fafc !important;
+}
+body[data-theme="dark"] .stNumberInput button:hover {
+  background-color: #334155 !important;
+}
+body[data-theme="dark"] label,
+body[data-theme="dark"] .stTextInput label,
+body[data-theme="dark"] .stNumberInput label,
+body[data-theme="dark"] .stSelectbox label,
+body[data-theme="dark"] .stTextArea label,
+body[data-theme="dark"] .stDateInput label {
+  color: #cbd5e1 !important;
+}
+body[data-theme="dark"] .stSelectbox ul {
+  background-color: #1e293b !important;
+}
+body[data-theme="dark"] .stSelectbox li {
+  color: #f8fafc !important;
+}
 </style>
 """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+import streamlit.components.v1 as components
+theme_html = """
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; }
+  .theme-switch-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+  }
+  .theme-switch {
+    display: inline-block;
+    height: 34px;
+    position: relative;
+    width: 60px;
+  }
+  .theme-switch input {
+    display: none;
+  }
+  .slider {
+    background-color: #cbd5e1;
+    bottom: 0;
+    cursor: pointer;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+    transition: .4s;
+    border-radius: 34px;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .slider:before {
+    background-color: #fff;
+    bottom: 4px;
+    content: "🌞";
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    height: 26px;
+    left: 4px;
+    position: absolute;
+    transition: .4s;
+    width: 26px;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  input:checked + .slider {
+    background-color: #1e293b;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+  }
+  input:checked + .slider:before {
+    transform: translateX(26px);
+    content: "🌙";
+    background-color: #334155;
+  }
+</style>
+<div class="theme-switch-wrapper">
+  <label class="theme-switch" for="checkbox">
+    <input type="checkbox" id="checkbox" />
+    <div class="slider round"></div>
+  </label>
+</div>
+<script>
+  const toggleSwitch = document.getElementById('checkbox');
+  const parentBody = window.parent.document.body;
+  const frameElement = window.frameElement;
+  
+  if (frameElement) {
+      const getScrollTop = () => {
+          const stMain = window.parent.document.querySelector('.stMain');
+          const appView = window.parent.document.querySelector('.stAppViewContainer');
+          return (stMain ? stMain.scrollTop : 0) || (appView ? appView.scrollTop : 0) || window.parent.scrollY || 0;
+      };
+      
+      frameElement.style.position = 'fixed';
+      frameElement.style.right = '15px';
+      frameElement.style.zIndex = '999999';
+      frameElement.style.border = 'none';
+      frameElement.style.width = '80px';
+      frameElement.style.height = '40px';
+      frameElement.style.top = (15 - getScrollTop()) + 'px';
+      
+      const updateScroll = () => {
+          frameElement.style.top = (15 - getScrollTop()) + 'px';
+      };
+      
+      const stMain = window.parent.document.querySelector('.stMain');
+      if (stMain) stMain.addEventListener('scroll', updateScroll);
+      
+      const appView = window.parent.document.querySelector('.stAppViewContainer');
+      if (appView) appView.addEventListener('scroll', updateScroll);
+      
+      window.parent.addEventListener('scroll', updateScroll);
+  }
+  
+  // Set initial state from existing body attribute
+  if (parentBody.getAttribute('data-theme') === 'dark') {
+      toggleSwitch.checked = true;
+  }
+  
+  toggleSwitch.addEventListener('change', function(e) {
+      if (e.target.checked) {
+          parentBody.setAttribute('data-theme', 'dark');
+      } else {
+          parentBody.setAttribute('data-theme', 'light');
+      }
+  }, false);
+</script>
+"""
+# Render the component transparently and allow it to float via CSS fixed positioning
+components.html(theme_html, height=40)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -813,7 +1214,7 @@ def parse_interrupt_details(msg: str) -> dict:
 # ║ LOGIN SCREEN                       ║
 # ╚═══════════════════════════════════════════════════════════╝
 if not st.session_state.logged_in:
-  col_l, col_c, col_r = st.columns([1, 1.5, 1])
+  col_l, col_c, col_r = st.columns([1, 1.2, 1])
   with col_c:
     st.markdown(
       """
@@ -825,10 +1226,10 @@ if not st.session_state.logged_in:
         border: 1px solid rgba(255, 255, 255, 0.8);
         box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.1), 0 10px 20px -5px rgba(0, 0, 0, 0.05);
         border-radius: 28px;
-        padding: 3.5rem 2.5rem;
+        padding: 2rem 2rem;
         text-align: center;
-        margin-top: 3rem;
-        margin-bottom: 2rem;
+        margin-top: 0.5rem;
+        margin-bottom: 1.5rem;
         transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.4s cubic-bezier(0.4, 0, 0.2, 1);
       }
       .premium-login-card:hover {
@@ -836,29 +1237,22 @@ if not st.session_state.logged_in:
         box-shadow: 0 30px 60px -12px rgba(0, 0, 0, 0.15), 0 20px 30px -10px rgba(0, 0, 0, 0.1);
       }
       .logo-container {
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
-        width: 80px;
-        height: 80px;
+        width: 250px;
+        height: 70px;
         background: linear-gradient(135deg, #3B82F6, #8B5CF6, #EC4899);
         background-size: 200% 200%;
         animation: gradientShift 5s ease infinite;
         border-radius: 22px;
-        margin-bottom: 1.75rem;
+        margin: 0 auto 1.5rem auto;
         box-shadow: 0 10px 25px rgba(139, 92, 246, 0.4);
       }
       @keyframes gradientShift {
         0% { background-position: 0% 50%; }
         50% { background-position: 100% 50%; }
         100% { background-position: 0% 50%; }
-      }
-      .logo-text {
-        font-size: 2.2rem;
-        color: #FFFFFF;
-        font-weight: 800;
-        font-family: 'Inter', sans-serif;
-        text-shadow: 0 2px 4px rgba(0,0,0,0.2);
       }
       .app-title {
         color: #0F172A;
@@ -877,9 +1271,8 @@ if not st.session_state.logged_in:
       
       <div class="premium-login-card">
         <div class="logo-container">
-          <span class="logo-text">A</span>
+          <img src=\"""" + logo_img_src + """\" alt="AcmeCorp Logo" style="width: 100%; height: 100%; object-fit: contain;" />
         </div>
-        <h2 class="app-title">Acme Corp</h2>
         <p class="app-subtitle">Sign in to the Expense Approval Portal</p>
       </div>
       """,
@@ -955,8 +1348,8 @@ with st.sidebar:
   # Logo
   st.markdown(
     """<div class="sidebar-logo">
-      <div class="sidebar-logo-icon"><span style="font-weight:800;font-family:Inter,sans-serif;">A</span></div>
-      <div>
+      <div class="sidebar-logo-icon"><img src=\"""" + logo_img_src + """\" alt="AcmeCorp Logo" style="width: 100%; height: 100%; object-fit: contain;"/></div>
+      <div style="display: flex; flex-direction: column; justify-content: center; margin-top: 2px;">
         <div class="sidebar-logo-text">Acme Corp</div>
         <div class="sidebar-logo-sub">Expenses</div>
       </div>
