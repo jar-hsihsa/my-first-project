@@ -11,6 +11,7 @@ This skill defines the standard operating procedure for handling and resolving G
 
 - **Explain Commands**: Since the user may not be familiar with Git commands, you MUST provide a brief, plain-English message explaining exactly what each Git or terminal command does before asking for execution permission or running it.
 - **Explicit Approval**: Always wait for explicit user approval before running any branch creation, merging, pushing, or repository synchronization commands.
+- **No Browser Agent without Approval**: Never ever run the browser agent (`browser_subagent` tool) without taking explicit user approval beforehand.
 
 ## Workflow Steps
 
