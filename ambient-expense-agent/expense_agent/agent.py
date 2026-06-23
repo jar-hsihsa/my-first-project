@@ -278,7 +278,7 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     if has_violations:
         # redacted now contains ALL violations e.g. ["SSN", "Credit Card", "Prompt Injection"]
         risk_msg = (
-            f"CRITICAL RISK: Violations detected — {', '.join(redacted)}. "
+            "CRITICAL RISK: Security policy violation detected. "
             "Escalated for human review."
         )
 

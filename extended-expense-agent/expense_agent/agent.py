@@ -111,11 +111,30 @@ def check_duplicate(amount: float, date: str, submitter: str, description: str) 
 
 
 class ExpenseReport(BaseModel):
-    amount: float = Field(description="The dollar amount of the expense.")
+    amount: float = Field(description="The amount of the expense.")
+    currency: str = Field(description="The currency of the expense (e.g., USD, EUR). Defaults to USD.", default="USD")
     submitter: str = Field(description="The name or email of the person submitting the expense.")
     category: str = Field(description="The category of the expense. MUST be exactly one of: 'Meals', 'Travel', 'Equipment', 'Office Supplies', 'Software', or 'Miscellaneous'. Do not use hyphens.")
     description: str = Field(description="The description or justification for the expense.")
     date: str = Field(description="The date of the expense.")
+
+def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, str]:
+    """Convert amount to USD using Frankfurter API. Returns (usd_amount, note_to_append)."""
+    currency = currency.upper().strip()
+    if currency == "USD":
+        return amount, ""
+    try:
+        import urllib.request
+        import json
+        url = f"https://api.frankfurter.app/{date}?from={currency}&to=USD"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            rate = data['rates']['USD']
+            converted = round(amount * rate, 2)
+            return converted, f" [Original: {amount} {currency} converted at {rate} rate]"
+    except Exception as e:
+        return amount, f" [Warning: Conversion failed: Currency {currency} not supported by exchange rate API. Amount defaulted to 1:1.]"
 
 
 def extract_input_json(node_input: Any) -> dict:
@@ -165,7 +184,7 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
             model=MODEL_NAME,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                "Extract the expense details from this receipt. You MUST extract the date (standardized to YYYY-MM-DD format) and category alongside the amount field. If the submitter/employee email is not on the receipt, set it to 'employee@acmecorp.com'. If you cannot clearly identify a category from the receipt, you MUST default to 'Miscellaneous'. Do not leave the category blank or use a hyphen."
+                "Extract the expense details from this receipt. You MUST extract the date (standardized to YYYY-MM-DD format) and category alongside the amount field. Also extract the currency of the transaction (e.g., USD, EUR, GBP, JPY). If not explicitly stated but implied, infer it. Default to USD if completely unknown. If the submitter/employee email is not on the receipt, set it to 'employee@acmecorp.com'. If you cannot clearly identify a category from the receipt, you MUST default to 'Miscellaneous'. Do not leave the category blank or use a hyphen."
             ],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -215,6 +234,13 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
         expense = parse_expense_from_event(event_dict)
         expense_dict = expense.model_dump()
         
+        # Convert currency if needed
+        currency = expense_dict.get("currency", "USD")
+        if currency.upper() != "USD":
+            usd_amount, note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
+            expense_dict["amount"] = usd_amount
+            expense_dict["description"] = expense_dict.get("description", "") + note
+
         # Increment run count for sequential testing in the same session
         run_count = ctx.state.get("run_count", 0) + 1
         
