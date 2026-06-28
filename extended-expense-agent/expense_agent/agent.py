@@ -227,7 +227,7 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
 
 
 @node
-def parse_expense_node(ctx: Context, node_input: Any) -> Event:
+def parse_expense_node(ctx: Context, node_input: Any):
     """Decodes the incoming event payload and parses the expense report."""
     try:
         # Try to parse the input as a new expense payload
@@ -241,6 +241,12 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
         expense_dict["original_currency"] = currency
         if currency.upper() != "USD":
             usd_amount, note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
+            yield Event(
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=f"💱 **Conversion Applied:** {expense_dict['amount']} {currency.upper()} ≈ **${usd_amount:.2f} USD** (Live Rate)")]
+                )
+            )
             expense_dict["amount"] = usd_amount
             expense_dict["description"] = expense_dict.get("description", "") + note
 
@@ -248,7 +254,7 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
         run_count = ctx.state.get("run_count", 0) + 1
         
         # If successful, reset state keys for a new evaluation run in the same session
-        return Event(
+        yield Event(
             output={"expense": expense_dict},
             state={
                 "expense": expense_dict,
@@ -262,9 +268,9 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
     except Exception as e:
         # If parsing fails, it's likely a resume input (e.g. "Approve"), fallback to cached state
         if ctx.state.get("expense"):
-            return Event(output={"expense": ctx.state["expense"]})
-            
-        raise ValueError(f"Error parsing expense receipt/payload: {e}")
+            yield Event(output={"expense": ctx.state["expense"]})
+        else:
+            raise ValueError(f"Error parsing expense receipt/payload: {e}")
 
 def is_luhn_valid(cc_str: str) -> bool:
     """Validate credit card number using Luhn algorithm."""
