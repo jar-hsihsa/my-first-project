@@ -1881,12 +1881,24 @@ if st.session_state.role == "Employee":
           exp_id = str(exp_id_raw) if str(exp_id_raw).startswith("PENDING") else f"EX{int(exp_id_raw):04d}"
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
+          
+          # Extract original conversion note if present in description
+          desc = exp.get('description', '—')
+          amount_display = f"${exp.get('amount',0):.2f}"
+          import re
+          match = re.search(r'\[Original: ([\d.]+) ([A-Z]+) converted at', desc)
+          if match:
+              orig_amt = match.group(1)
+              orig_cur = match.group(2)
+              amount_display = f"{orig_amt} {orig_cur}<br><small style='color:gray'>≈ ${exp.get('amount',0):.2f} USD</small>"
+              desc = re.sub(r' \[Original: .*?\]', '', desc)
+
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
-            <td><strong>${exp.get('amount',0):.2f}</strong></td>
-            <td>{_esc(exp.get('description','—')[:40])}</td>
+            <td><strong>{amount_display}</strong></td>
+            <td>{_esc(desc[:60])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
 
