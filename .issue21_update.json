@@ -1,0 +1,4 @@
+{
+  "title": "UI Enhancements: Global Theme Toggle, Multi-Currency Support, and Login Layout Fix",
+  "body": "New Requirement:\n1 - Add a **toggle button** for theme change **globally** in the page at the top right corner with **day and night symbol** without any text.\n2 - **Multi-Currency & Real-Time Exchange Rates**\nIf employees travel internationally, they might submit receipts in EUR, GBP, or JPY. We could integrate an external API (like ExchangeRate-API) to **automatically detect the currency** on the receipt.\n**Convert the total** to the company's base currency (e.g., USD) using the exact current exchange rate from the date on the receipt.\n3 - **Reduce the width** of the acme corp rectangular box on the login page a bit or **shift that box up** a little so that the login with employee or admin CTA should be **visible to the user** and the user need not scroll down."
+}

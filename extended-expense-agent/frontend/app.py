@@ -151,31 +151,30 @@ section[data-testid="stSidebar"] .stButton > button:hover {
 }
 .sidebar-logo {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.25rem 1rem;
+  text-align: center;
+  padding: 1.75rem 1rem 1.25rem 1rem;
 }
-.sidebar-logo-icon {
-  width: 100px;
-  height: 30px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #3B82F6, #8B5CF6);
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.sidebar-logo-text {
-  font-weight: 700;
-  font-size: 1.05rem;
-  color: #FFFFFF !important;
-  line-height: 1.15;
+.sidebar-logo-img {
+  height: 70px;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 .sidebar-logo-sub {
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   color: #94A3B8 !important;
-  font-weight: 400;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-top: 0.35rem;
+  text-align: center;
+  width: 100%;
 }
+
 
 /* ── Top header bar ──────────────────────────────────────── */
 .top-header {
@@ -1318,14 +1317,13 @@ if not st.session_state.logged_in:
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 250px;
+        width: 150px;
         height: 70px;
-        background: linear-gradient(135deg, #3B82F6, #8B5CF6, #EC4899);
-        background-size: 200% 200%;
-        animation: gradientShift 5s ease infinite;
-        border-radius: 22px;
+        border-radius: 12px;
         margin: 0 auto 1.5rem auto;
-        box-shadow: 0 10px 25px rgba(139, 92, 246, 0.4);
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
       }
       @keyframes gradientShift {
         0% { background-position: 0% 50%; }
@@ -1426,11 +1424,8 @@ with st.sidebar:
   # Logo
   st.markdown(
     """<div class="sidebar-logo">
-      <div class="sidebar-logo-icon"><img src=\"""" + logo_img_src + """\" alt="AcmeCorp Logo" style="width: 100%; height: 100%; object-fit: contain;"/></div>
-      <div style="display: flex; flex-direction: column; justify-content: center; margin-top: 2px;">
-        <div class="sidebar-logo-text">Acme Corp</div>
-        <div class="sidebar-logo-sub">Expenses</div>
-      </div>
+      <img src=\"""" + logo_img_src + """\" alt="AcmeCorp Logo" class="sidebar-logo-img" />
+      <div class="sidebar-logo-sub">Expenses Management</div>
     </div>""",
     unsafe_allow_html=True,
   )

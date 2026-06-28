@@ -1,0 +1,5 @@
+{
+  "title": "Multi-currency support in Fill Expense form",
+  "body": "New Requirement to edit the Fill Expense form:\n\n1. **Currency Selection**: Give the employee the option to choose a currency symbol before entering the amount, removing the default `$`. \n2. **Amount Entry**: Once the employee selects the currency symbol, ask them to add the amount (to support international travel). The employee inputs the amount in the selected currency.\n3. **Real-time Conversion**: Beside the entered amount (e.g., `£21.34`), show the converted amount in USD like `(= $X.XX)` using a real-time conversion rate. This should be transparent to both the employee and the admin approving it.\n4. **Email Notification**: Based on this, a clear description should be sent via email to the employee. In the email, it should be clear to the employee what the conversion rate is and its equivalent `$` conversion.",
+  "labels": ["requirement"]
+}
