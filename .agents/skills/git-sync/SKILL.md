@@ -19,6 +19,10 @@ When the user asks to "sync the repo" or run the `git-sync` skill, follow these 
 1. Use the helper script located at `./scripts/sync.sh` within this skill's directory, OR manually propose the exact commands from the script.
 2. The commands to be executed are:
    ```bash
+   git checkout ashish
+   # If running this right after a PR merge, explicitly delete the specific feature branch first:
+   # git branch -D <branch_name>
+   # git push origin --delete <branch_name>
    git fetch --prune
    # Delete local branches that have been merged into the current branch
    git branch --merged | grep -vE '^\*|main|master|develop|ashish' | xargs -r git branch -d

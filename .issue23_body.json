@@ -1,5 +1,0 @@
-{
-  "title": "Add official AcmeCorp logo across all pages",
-  "body": "Update the placeholder 'A' logo with the official AcmeCorp logo globally across the application. The new logo should be implemented in the following areas:\n\n- Main Login Page\n- Employee Portal\n- Admin Portal\n- Any other areas where the company logo is currently displayed as 'A'\n\nThe logo asset has been provided by the team.",
-  "labels": ["enhancement"]
-}

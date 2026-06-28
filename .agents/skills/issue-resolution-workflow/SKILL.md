@@ -40,7 +40,7 @@ This skill defines the standard operating procedure for handling and resolving G
    - **NOTE**: Use the `git-commit-formatter` skill to structure all commit messages.
 
 4. **Testing and Marking as 'Fixed'**:
-   - Once the issue is completely tested by end user, ask user to first label the issue as 'Fixed' in GitHub. 
+   - Once the issue is completely tested by end user, mark the issue as 'Fixed' in GitHub. **IMPORTANT:** When applying the 'Fixed' label, you MUST replace/remove all existing labels (like 'bug', 'requirement', etc.) so that 'Fixed' is the only label. If using the GitHub API via curl, use the `PUT` method instead of `POST` to overwrite the labels.
    - Do not close the issue without user approval. or Do not add 'Closed' label without user approval. Keep the issue in the issue tab only until you are asked to close it.  
 
 5. **Pull Request Creation**:
@@ -50,9 +50,9 @@ This skill defines the standard operating procedure for handling and resolving G
    - User will not raise the PR, you may give the link only just to land on the PR raised by you.
 
 6. **PR Merger Request Approval and Git Sync**:
-   - If everything looks good take approval from user if PR can be closed or merged into `ashish` branch. Once user approves it, go ahead and merge it.
-   - After the PR has been approved and merged, you must take the user approval to run the `git-sync` skill to clean up local branches and synchronize the local repository with the remote.
-   - If the user approves it, then only run the `git-sync` skill.
+   - Whenever there is a comment on the PR as "Approved", "looks good", "LGTM", or any similar affirmative comment, go ahead and merge the changes to the `ashish` branch.
+   - Immediately after merging, explicitly delete that specific feature branch from the remote (`git push origin --delete <branch_name>`) and from local (`git branch -D <branch_name>`).
+   - Finally, keep the local repository in sync with the remote (e.g., checkout `ashish` and `git pull origin ashish`).
 
 7. **Post PR Merger and Git Sync**:
    - After the PR is merged into `ashish` and the sync is complete, add a final comment to the original GitHub issue (e.g., "Resolved by PR #<number>"), remove the 'Fixed' label, add the 'Closed' label, and close the issue.

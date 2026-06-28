@@ -126,7 +126,7 @@ def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, str]
     try:
         import urllib.request
         import json
-        url = f"https://api.frankfurter.app/{date}?from={currency}&to=USD"
+        url = f"https://open.er-api.com/v6/latest/{currency}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode('utf-8'))
