@@ -1534,20 +1534,33 @@ if st.session_state.role == "Employee":
         if st.button("Load Demo Receipt"):
           try:
             import random
+            import json
             receipts = [
-              "Meals.png",
-              "Meals_2.png",
-              "Travel.png",
-              "Equipment.png",
-              "Office_Supplies.png",
-              "Software.png",
-              "Other.png",
-              "Other_2.png",
-              "Other_3.png",
+              "demo_receipt_eur.png",
+              "demo_receipt_gbp.png",
+              "demo_receipt_jpy.png",
+              "demo_receipt_inr.png",
+              "demo_receipt_cad.png",
             ]
-            last_chosen = st.session_state.get("last_chosen_receipt")
+            
+            state_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".last_receipt.json")
+            last_chosen = None
+            try:
+              if os.path.exists(state_file):
+                with open(state_file, "r") as f:
+                  last_chosen = json.load(f).get("last_receipt")
+            except Exception:
+              pass
+
             available = [r for r in receipts if r != last_chosen]
             chosen_receipt = random.choice(available if available else receipts)
+            
+            try:
+              with open(state_file, "w") as f:
+                json.dump({"last_receipt": chosen_receipt}, f)
+            except Exception:
+              pass
+              
             st.session_state.last_chosen_receipt = chosen_receipt
             st.session_state.demo_receipt_name = chosen_receipt
             demo_path = os.path.join(
@@ -1585,6 +1598,8 @@ if st.session_state.role == "Employee":
       ext_lower = ext_part.replace(".", "").lower()
       formatted_caption = f"{category_name}.{ext_lower}"
       st.image(image_to_submit, caption=formatted_caption, width=500)
+
+
 
     if st.button(
       "Submit Receipt",
@@ -1646,10 +1661,32 @@ if st.session_state.role == "Employee":
         unsafe_allow_html=True
       )
 
-      col_a, col_b = st.columns(2)
+      col_cur, col_a, col_b = st.columns([1, 1, 1])
+      with col_cur:
+        # Extensive list of global currencies
+        all_currencies = [
+            "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR",
+            "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AWG", "AZN", 
+            "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", 
+            "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CDF", "CLP", "COP", 
+            "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", 
+            "ERN", "ETB", "FJD", "FKP", "GEL", "GHS", "GIP", "GMD", "GNF", 
+            "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS", 
+            "IQD", "IRR", "ISK", "JMD", "JOD", "KES", "KGS", "KHR", "KMF", 
+            "KPW", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", 
+            "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", 
+            "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", 
+            "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", 
+            "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", 
+            "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLL", "SOS", "SRD", 
+            "SSP", "STN", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", 
+            "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", 
+            "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"
+        ]
+        exp_currency = st.selectbox("Currency", all_currencies)
       with col_a:
         exp_amount = st.number_input(
-          "Amount ($)",
+          "Amount",
           min_value=0.01,
           step=0.01,
           value=50.00,
@@ -1666,6 +1703,16 @@ if st.session_state.role == "Employee":
             "Software",
             "Other",
           ],
+        )
+
+      if exp_currency != "USD":
+        from expense_agent.agent import convert_to_usd
+        converted_amt, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
+        st.markdown(
+            f"""<div style="background-color: rgba(37,99,235,0.05); padding: 0.5rem 0.75rem; border-radius: 6px; margin-top: -0.5rem; margin-bottom: 1rem; border: 1px dashed rgba(37,99,235,0.3); font-size: 0.85rem;">
+            💱 <strong>Conversion Estimate:</strong> {exp_amount:.2f} {exp_currency} ≈ <strong>${converted_amt:.2f} USD</strong> (Live Rate)
+            </div>""",
+            unsafe_allow_html=True
         )
 
       col_c, col_d = st.columns(2)
@@ -1702,6 +1749,7 @@ if st.session_state.role == "Employee":
 
           data = {
             "amount": float(exp_amount),
+            "currency": exp_currency,
             "submitter": exp_submitter,
             "category": exp_category,
             "description": exp_description,

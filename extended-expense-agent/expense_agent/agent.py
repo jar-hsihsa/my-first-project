@@ -180,6 +180,7 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
         mime_type = event.get("mime_type", "image/png")
         
         client = genai.Client(vertexai=use_vertex)
+        
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=[
@@ -236,6 +237,8 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
         
         # Convert currency if needed
         currency = expense_dict.get("currency", "USD")
+        expense_dict["original_amount"] = expense_dict["amount"]
+        expense_dict["original_currency"] = currency
         if currency.upper() != "USD":
             usd_amount, note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
             expense_dict["amount"] = usd_amount
@@ -653,13 +656,18 @@ def notification_node(ctx: Context, node_input: dict) -> Event:
     submitter = expense.get("submitter", "employee@acmecorp.com")
     
     email_subject = f"Notification: Your Expense Report has been {decision}"
+    
+    amount_str = f"${expense.get('amount', 0.0)}"
+    if expense.get("original_currency") and expense.get("original_currency").upper() != "USD":
+        amount_str = f"{expense.get('original_amount')} {expense.get('original_currency')} (Converted to ${expense.get('amount', 0.0)} USD)"
+
     email_body = (
         f"To: {submitter}\n"
         f"From: expense-system@acmecorp.com\n"
         f"Subject: {email_subject}\n\n"
         f"Dear Employee,\n\n"
         f"Your expense report submitted on {expense.get('date', 'N/A')} for the amount of "
-        f"${expense.get('amount', 0.0)} ({expense.get('category', 'N/A')}) has been {decision}.\n\n"
+        f"{amount_str} ({expense.get('category', 'N/A')}) has been {decision}.\n\n"
         f"Reason: {reason}\n"
         f"Risk Assessment Details: {risk}\n\n"
         f"Regards,\n"
