@@ -990,19 +990,10 @@ for k, v in _defaults.items():
     st.session_state[k] = v
 
 
-# Restore session from query parameters
-# Bug #8: validate role against known-good set to prevent URL-based privilege escalation
+# Prevent URL privilege escalation bypass by clearing query parameters if not logged in
 if not st.session_state.logged_in:
-    if "email" in st.query_params and "role" in st.query_params:
-        requested_role = st.query_params["role"]
-        requested_email = st.query_params["email"]
-        if requested_role in _VALID_ROLES and "@" in requested_email:
-            st.session_state.logged_in = True
-            st.session_state.email = requested_email
-            st.session_state.role = requested_role
-        else:
-            # Tampered params — clear them and force re-login
-            st.query_params.clear()
+    if "email" in st.query_params or "role" in st.query_params:
+        st.query_params.clear()
 
 if st.session_state.session_id is None:
   # Bug #5: standardize on async session creation everywhere
@@ -1016,6 +1007,23 @@ if st.session_state.session_id is None:
 def _db_path():
   dir_path = os.path.dirname(os.path.abspath(__file__))
   return os.path.join(os.path.dirname(dir_path), "expenses.db")
+
+
+def verify_credentials(email: str, password: str) -> bool:
+  """Verify user credentials against SQLite database."""
+  import hashlib
+  try:
+    hashed_pwd = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    with sqlite3.connect(_db_path()) as conn:
+      cur = conn.cursor()
+      cur.execute(
+        "SELECT role FROM users WHERE email = ? AND password_hash = ?",
+        (email.strip(), hashed_pwd),
+      )
+      row = cur.fetchone()
+      return row is not None
+  except Exception:
+    return False
 
 
 def get_employee_expenses(email: str) -> list[dict]:
@@ -1396,7 +1404,7 @@ if not st.session_state.logged_in:
       elif st.session_state.selected_login_role == "Employee":
         employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 7]]
         selected_employee = st.selectbox("Select Employee", options=employee_names)
-        password = st.text_input("Password", type="password", value="password")
+        password = st.text_input("Password", type="password", value="")
         
         col_b1, col_b2 = st.columns([1, 2])
         with col_b1:
@@ -1405,18 +1413,21 @@ if not st.session_state.logged_in:
             st.rerun()
         with col_b2:
           if st.button("Sign In", type="primary", use_container_width=True):
-            st.session_state.logged_in = True
-            # Map Employee 1 to employee1@acmecorp.com
             emp_num = selected_employee.split(" ")[1]
-            st.session_state.email = f"employee{emp_num}@acmecorp.com"
-            st.session_state.role = "Employee"
-            st.query_params["email"] = st.session_state.email
-            st.query_params["role"] = st.session_state.role
-            st.rerun()
+            email = f"employee{emp_num}@acmecorp.com"
+            if verify_credentials(email, password):
+              st.session_state.logged_in = True
+              st.session_state.email = email
+              st.session_state.role = "Employee"
+              st.query_params["email"] = st.session_state.email
+              st.query_params["role"] = st.session_state.role
+              st.rerun()
+            else:
+              st.error("Invalid password. Please try again.")
             
       elif st.session_state.selected_login_role == "Admin":
         email = st.text_input("Corporate Email", value="admin@acmecorp.com")
-        password = st.text_input("Password", type="password", value="password")
+        password = st.text_input("Password", type="password", value="")
 
         col_b1, col_b2 = st.columns([1, 2])
         with col_b1:
@@ -1426,12 +1437,15 @@ if not st.session_state.logged_in:
         with col_b2:
           if st.button("Sign In", type="primary", use_container_width=True):
             if email.strip():
-              st.session_state.logged_in = True
-              st.session_state.email = email
-              st.session_state.role = "Admin"
-              st.query_params["email"] = email
-              st.query_params["role"] = "Admin"
-              st.rerun()
+              if verify_credentials(email, password):
+                st.session_state.logged_in = True
+                st.session_state.email = email
+                st.session_state.role = "Admin"
+                st.query_params["email"] = email
+                st.query_params["role"] = "Admin"
+                st.rerun()
+              else:
+                st.error("Invalid email or password.")
             else:
               st.error("Please enter a valid email.")
 
@@ -1462,7 +1476,6 @@ with st.sidebar:
       f'<div class="nav-active">Pending Approvals {badge}</div>',
       unsafe_allow_html=True,
     )
-    st.markdown('<div class="nav-item">All Expenses</div>', unsafe_allow_html=True)
   else:
     st.markdown('<div class="nav-active">Submit Expense</div>', unsafe_allow_html=True)
 

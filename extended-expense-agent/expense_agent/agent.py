@@ -66,6 +66,12 @@ _DB_PATH: str = os.path.join(
 )
 
 
+def hash_password(password: str) -> str:
+    """Helper to hash password with SHA-256."""
+    import hashlib
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 def init_db():
     """Create required tables if they don't already exist."""
     with sqlite3.connect(_DB_PATH) as conn:
@@ -92,7 +98,35 @@ def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                name TEXT,
+                role TEXT,
+                password_hash TEXT
+            )
+        """)
         conn.commit()
+
+        # Check if users table is empty and seed if necessary
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            default_users = [
+                ("employee1@acmecorp.com", "Employee 1", "Employee", hash_password("emp1pass")),
+                ("employee2@acmecorp.com", "Employee 2", "Employee", hash_password("emp2pass")),
+                ("employee3@acmecorp.com", "Employee 3", "Employee", hash_password("emp3pass")),
+                ("employee4@acmecorp.com", "Employee 4", "Employee", hash_password("emp4pass")),
+                ("employee5@acmecorp.com", "Employee 5", "Employee", hash_password("emp5pass")),
+                ("employee7@acmecorp.com", "Employee 7", "Employee", hash_password("emp7pass")),
+                ("admin@acmecorp.com", "Acme Admin", "Admin", hash_password("adminpass")),
+            ]
+            conn.executemany(
+                "INSERT INTO users (email, name, role, password_hash) VALUES (?, ?, ?, ?)",
+                default_users
+            )
+            conn.commit()
 
 
 def check_duplicate(amount: float, date: str, submitter: str, description: str) -> bool:
