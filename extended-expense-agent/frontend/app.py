@@ -1712,12 +1712,8 @@ if st.session_state.role == "Employee":
                     "role": "user",
                 }
                 
-                try:
-                    import asyncio
-                    session = asyncio.run(agent_runtime.async_create_session(user_id="streamlit_user"))
-                    st.session_state.session_id = session["id"]
-                except Exception:
-                    pass
+                # We reuse the existing session_id that is already in st.session_state 
+                # so we don't clutter the backend with multiple sessions for one expense.
                 
                 events = run_agent(message_dict)
                 process_events(events)

@@ -447,8 +447,9 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
         submitted_date = expense.get("date", "")
         ocr_date = str(expense.get("ocr_date", "")).strip()
         try:
+            from datetime import datetime
             import dateutil.parser
-            d1 = dateutil.parser.parse(submitted_date).date()
+            d1 = datetime.strptime(submitted_date, "%Y-%m-%d").date()
             d2 = dateutil.parser.parse(ocr_date).date()
             if d1 != d2:
                 tamper_alerts.append(f"Date changed from '{ocr_date}' to '{submitted_date}'.")
