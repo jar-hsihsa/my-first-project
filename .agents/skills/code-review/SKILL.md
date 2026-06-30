@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Reviews code changes for bugs, style issues, and best practices. Use when reviewing PRs or checking code quality.
+description: Reviews code changes for bugs, style issues, and best practices end to end project.
 ---
 
 # Code Review Skill

@@ -959,7 +959,7 @@ theme_html = """
 </script>
 """
 # Render the component transparently and allow it to float via CSS fixed positioning
-components.html(theme_html, height=40)
+st.iframe(theme_html, height=40)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -983,22 +983,18 @@ _defaults = {
   "saved_session_ids": set(),
   "demo_receipt_bytes": None,
   "demo_receipt_name": None,
-  "uploader_key": 1
+  "uploader_key": 1,
+  "manual_submit_success": False,
+  "manual_amount": None,
+  "manual_currency": None,
+  "manual_category": None,
+  "manual_submitter": "",
+  "manual_date": None,
+  "manual_description": ""
 }
 for k, v in _defaults.items():
   if k not in st.session_state:
     st.session_state[k] = v
-
-
-# Prevent URL privilege escalation bypass by clearing query parameters if not logged in
-if not st.session_state.logged_in:
-    if "email" in st.query_params or "role" in st.query_params:
-        st.query_params.clear()
-
-if st.session_state.session_id is None:
-  # Bug #5: standardize on async session creation everywhere
-  session = asyncio.run(agent_runtime.async_create_session(user_id="streamlit_user"))
-  st.session_state.session_id = session["id"]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1007,6 +1003,41 @@ if st.session_state.session_id is None:
 def _db_path():
   dir_path = os.path.dirname(os.path.abspath(__file__))
   return os.path.join(os.path.dirname(dir_path), "expenses.db")
+
+
+# Prevent URL privilege escalation bypass by verifying query parameter token if not logged in
+if not st.session_state.logged_in:
+    email = st.query_params.get("email")
+    role = st.query_params.get("role")
+    token = st.query_params.get("token")
+    if email and role and token:
+        import hashlib
+        verified = False
+        try:
+            with sqlite3.connect(_db_path()) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT role, password_hash FROM users WHERE email = ?", (email.strip(),))
+                row = cur.fetchone()
+                if row:
+                    db_role, password_hash = row
+                    expected_token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
+                    if token == expected_token and db_role == role and db_role in _VALID_ROLES:
+                        st.session_state.logged_in = True
+                        st.session_state.email = email
+                        st.session_state.role = role
+                        verified = True
+        except Exception:
+            pass
+        if not verified:
+            st.query_params.clear()
+    else:
+        if "email" in st.query_params or "role" in st.query_params or "token" in st.query_params:
+            st.query_params.clear()
+
+if st.session_state.session_id is None:
+  # Bug #5: standardize on async session creation everywhere
+  session = asyncio.run(agent_runtime.async_create_session(user_id="streamlit_user"))
+  st.session_state.session_id = session["id"]
 
 
 def verify_credentials(email: str, password: str) -> bool:
@@ -1058,26 +1089,11 @@ def get_all_expenses() -> list[dict]:
 def save_expense(expense: dict, status: str):
   """Save a newly approved or rejected expense to the database.
   
-  Includes a DB-level duplicate guard: if a row with the same amount,
-  submitter, date, and description already exists, the insert is skipped.
   Uses a context manager to prevent connection leaks (Bug #4).
   """
   try:
     with sqlite3.connect(_db_path()) as conn:
       cur = conn.cursor()
-      # Bug #12: align duplicate guard fields with agent.py check_duplicate
-      # Uses (amount, submitter, date, description) — same four-field key.
-      cur.execute(
-        "SELECT COUNT(*) FROM expenses WHERE amount = ? AND submitter = ? AND date = ? AND description = ?",
-        (
-          expense.get("amount", 0.0),
-          expense.get("submitter", ""),
-          expense.get("date", ""),
-          expense.get("description", ""),
-        )
-      )
-      if cur.fetchone()[0] > 0:
-        return  # Already saved — skip duplicate insert
       cur.execute(
         "INSERT INTO expenses (amount, submitter, category, description, date, status) VALUES (?, ?, ?, ?, ?, ?)",
         (
@@ -1103,10 +1119,6 @@ def save_pending_approval(session_id: str, interrupt_id: str, message: str, subm
         (session_id, interrupt_id, message, receipt_bytes, submitter_email, raw_json)
       )
       conn.commit()
-      
-      print(f"\n[EMAIL TRIGGER] Sending urgent notification to admin@acmecorp.com")
-      print(f"Subject: Pending Approval Required for {submitter_email}")
-      print(f"Message:\n{message}\n")
   except Exception as e:
     print(f"Error saving pending approval: {e}")
 
@@ -1245,7 +1257,17 @@ def process_events(events, run_session_id=None, submitter_email=None):
               raw_json = parts[1].strip()
               # Update session state with parsed values for future use if needed
               st.session_state.raw_json = raw_json
-            if st.session_state.role == "Employee" and not st.session_state.get("from_review_submit", False):
+
+
+            if (
+              st.session_state.role == "Employee"
+              and not st.session_state.get("from_review_submit", False)
+              and (
+                args.get("interruptId") == "employee_review"
+                or args.get("interrupt_id") == "employee_review"
+                or fn_call.get("id") == "employee_review"
+              )
+            ):
               import json
               try:
                 st.session_state.review_expense_data = json.loads(raw_json)
@@ -1263,6 +1285,12 @@ def process_events(events, run_session_id=None, submitter_email=None):
                 receipt_bytes,
                 raw_json
               )
+              try:
+                raw_json_data = json.loads(raw_json)
+                if raw_json_data.get("is_manual_submit"):
+                  st.session_state.manual_submit_success = True
+              except Exception:
+                pass
 
     if "output" in event:
       final_output = event["output"]
@@ -1280,7 +1308,11 @@ def process_events(events, run_session_id=None, submitter_email=None):
         elif not final_output["expense"].get("submitter") or final_output["expense"]["submitter"] == "employee@acmecorp.com":
           final_output["expense"]["submitter"] = st.session_state.email
           
-        if st.session_state.role == "Employee" and not st.session_state.get("from_review_submit", False):
+        if (
+          st.session_state.role == "Employee"
+          and not st.session_state.get("from_review_submit", False)
+          and not final_output["expense"].get("is_manual_submit")
+        ):
           st.session_state.review_expense_data = final_output["expense"]
           st.session_state.review_session_to_track = session_to_track
         else:
@@ -1288,6 +1320,8 @@ def process_events(events, run_session_id=None, submitter_email=None):
           save_expense(final_output["expense"], decision)
           if session_to_track:
             st.session_state.saved_session_ids.add(session_to_track)
+          if final_output["expense"].get("is_manual_submit"):
+            st.session_state.manual_submit_success = True
 
 
 def parse_interrupt_details(msg: str) -> dict:
@@ -1421,6 +1455,21 @@ if not st.session_state.logged_in:
               st.session_state.role = "Employee"
               st.query_params["email"] = st.session_state.email
               st.query_params["role"] = st.session_state.role
+              
+              # Calculate secure token to survive refreshes
+              import hashlib
+              try:
+                with sqlite3.connect(_db_path()) as conn:
+                  cur = conn.cursor()
+                  cur.execute("SELECT password_hash FROM users WHERE email = ?", (email.strip(),))
+                  row = cur.fetchone()
+                  if row:
+                    password_hash = row[0]
+                    token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
+                    st.query_params["token"] = token
+              except Exception:
+                pass
+                
               st.rerun()
             else:
               st.error("Invalid password. Please try again.")
@@ -1443,6 +1492,21 @@ if not st.session_state.logged_in:
                 st.session_state.role = "Admin"
                 st.query_params["email"] = email
                 st.query_params["role"] = "Admin"
+                
+                # Calculate secure token to survive refreshes
+                import hashlib
+                try:
+                  with sqlite3.connect(_db_path()) as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT password_hash FROM users WHERE email = ?", (email.strip(),))
+                    row = cur.fetchone()
+                    if row:
+                      password_hash = row[0]
+                      token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
+                      st.query_params["token"] = token
+                except Exception:
+                  pass
+                  
                 st.rerun()
               else:
                 st.error("Invalid email or password.")
@@ -1776,6 +1840,7 @@ if st.session_state.role == "Employee":
             st.session_state.waiting_for_input = False
             st.session_state.final_output = None
             st.session_state.agent_messages = []
+            st.session_state.from_review_submit = False
 
             base64_image = base64.b64encode(image_to_submit).decode("utf-8")
             st.session_state.submitted_receipt_image = base64_image
@@ -1803,10 +1868,26 @@ if st.session_state.role == "Employee":
 
 
   with tab_form:
+    def reset_manual_form():
+      st.session_state.manual_amount = None
+      st.session_state.manual_currency = None
+      st.session_state.manual_category = None
+      st.session_state.manual_submitter = st.session_state.email
+      st.session_state.manual_date = date.today()
+      st.session_state.manual_description = ""
+      st.session_state.manual_submit_success = False
+      st.session_state.agent_messages = []
+
+    if not st.session_state.get("manual_submitter") and st.session_state.email:
+      st.session_state.manual_submitter = st.session_state.email
+    if not st.session_state.get("manual_date"):
+      st.session_state.manual_date = date.today()
+
+    if st.session_state.get("manual_submit_success"):
+      st.success("Expense processed successfully and routed to Admin if required!")
+      
     with st.form("expense_form", clear_on_submit=False):
-
-
-      col_cur, col_a, col_b = st.columns([1, 1, 1])
+      col_cur, col_a, col_conv, col_b = st.columns([1, 1, 1, 1.2])
       with col_cur:
         # Extensive list of global currencies
         all_currencies = [
@@ -1828,15 +1909,43 @@ if st.session_state.role == "Employee":
             "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", 
             "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"
         ]
-        exp_currency = st.selectbox("Currency", all_currencies)
+        exp_currency = st.selectbox(
+          "Currency",
+          all_currencies,
+          index=None,
+          placeholder="Select Currency...",
+          key="manual_currency",
+        )
       with col_a:
         exp_amount = st.number_input(
           "Amount",
           min_value=0.01,
           step=0.01,
-          value=50.00,
           format="%.2f",
+          value=None,
+          placeholder="0.00",
+          key="manual_amount",
         )
+      # Calculate converted USD value
+      usd_val = None
+      rate_str = ""
+      if exp_amount and exp_currency:
+        if exp_currency != "USD":
+          from expense_agent.agent import convert_to_usd
+          usd_val, rate, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
+          rate_str = f"*(Converted to USD using live rate: 1 {exp_currency.upper()} = ${rate} USD)*"
+        else:
+          usd_val = float(exp_amount)
+
+      with col_conv:
+        st.number_input(
+          "Amount (USD)",
+          value=usd_val,
+          disabled=True,
+          format="%.2f",
+          placeholder="0.00",
+        )
+
       with col_b:
         exp_category = st.selectbox(
           "Category",
@@ -1848,40 +1957,53 @@ if st.session_state.role == "Employee":
             "Software",
             "Other",
           ],
+          index=None,
+          placeholder="Select Category...",
+          key="manual_category",
         )
 
-      if exp_currency != "USD":
-        from expense_agent.agent import convert_to_usd
-        converted_amt, _, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
-        st.markdown(
-            f"""<div style="background-color: rgba(37,99,235,0.05); padding: 0.5rem 0.75rem; border-radius: 6px; margin-top: -0.5rem; margin-bottom: 1rem; border: 1px dashed rgba(37,99,235,0.3); font-size: 0.85rem;">
-            💱 <strong>Conversion Estimate:</strong> {exp_amount:.2f} {exp_currency} ≈ <strong>${converted_amt:.2f} USD</strong> (Live Rate)
-            </div>""",
-            unsafe_allow_html=True
-        )
+      if rate_str:
+        st.caption(rate_str)
 
       col_c, col_d = st.columns(2)
       with col_c:
         exp_submitter = st.text_input(
-          "Submitter Email", value=st.session_state.email
+          "Submitter Email", key="manual_submitter"
         )
       with col_d:
-        exp_date = st.date_input("Expense Date", value=date.today())
+        exp_date = st.date_input("Expense Date", key="manual_date")
 
       exp_description = st.text_area(
         "Purpose / Justification",
         placeholder="Describe the purpose of this expense…",
         height=100,
+        key="manual_description",
       )
 
-      submitted = st.form_submit_button(
-        "Submit Expense",
-        type="primary",
-        use_container_width=True,
-      )
+      col_btn1, col_btn2 = st.columns(2)
+      with col_btn1:
+        submitted = st.form_submit_button(
+          "Submit Expense",
+          type="primary",
+          use_container_width=True,
+        )
+      with col_btn2:
+        cleared = st.form_submit_button(
+          "Clear Form",
+          use_container_width=True,
+          on_click=reset_manual_form,
+        )
 
     if submitted:
-      if not exp_description.strip():
+      if not exp_amount:
+        st.error("Please enter a valid amount.")
+      elif not exp_currency:
+        st.error("Please select a currency.")
+      elif not exp_category:
+        st.error("Please select a category.")
+      elif not exp_submitter.strip():
+        st.error("Please enter the submitter email.")
+      elif not exp_description.strip():
         st.error("Please provide a description for the expense.")
       else:
         try:
@@ -1891,6 +2013,10 @@ if st.session_state.role == "Employee":
           st.session_state.final_output = None
           st.session_state.agent_messages = []
           st.session_state.submitted_receipt_image = None
+          st.session_state.review_expense_data = None
+          st.session_state.from_review_submit = False
+          st.session_state.review_submitted_success = False
+          st.session_state.manual_submit_success = False
 
           data = {
             "amount": float(exp_amount),
@@ -1899,6 +2025,7 @@ if st.session_state.role == "Employee":
             "category": exp_category,
             "description": exp_description,
             "date": str(exp_date),
+            "is_manual_submit": True,
           }
           st.session_state.raw_json = json.dumps(data, indent=2)
           
@@ -1912,6 +2039,8 @@ if st.session_state.role == "Employee":
             st.rerun()
         except Exception as e:
           st.error(f"An error occurred: {e}")
+
+
 
   # ── Progress / Final output ────────────────────
   if st.session_state.agent_messages:
