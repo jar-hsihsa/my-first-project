@@ -1444,17 +1444,71 @@ if not st.session_state.logged_in:
         with col_b1:
           if st.button(" Back", use_container_width=True):
             st.session_state.selected_login_role = None
+            st.session_state.emp_prev_state = (None, "")
             st.rerun()
         with col_b2:
-          if st.button("Sign In", type="primary", use_container_width=True):
-            emp_num = selected_employee.split(" ")[1]
-            email = f"employee{emp_num}@acmecorp.com"
+          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
+          
+        current_state = (selected_employee, password)
+        previous_state = st.session_state.get("emp_prev_state", (None, ""))
+        enter_pressed = (password != "") and (current_state != previous_state)
+        
+        if signin_clicked or enter_pressed:
+          st.session_state.emp_prev_state = current_state
+          emp_num = selected_employee.split(" ")[1]
+          email = f"employee{emp_num}@acmecorp.com"
+          if verify_credentials(email, password):
+            st.session_state.logged_in = True
+            st.session_state.email = email
+            st.session_state.role = "Employee"
+            st.query_params["email"] = st.session_state.email
+            st.query_params["role"] = st.session_state.role
+            
+            # Calculate secure token to survive refreshes
+            import hashlib
+            try:
+              with sqlite3.connect(_db_path()) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT password_hash FROM users WHERE email = ?", (email.strip(),))
+                row = cur.fetchone()
+                if row:
+                  password_hash = row[0]
+                  token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
+                  st.query_params["token"] = token
+            except Exception:
+              pass
+              
+            st.session_state.emp_prev_state = (None, "")
+            st.rerun()
+          else:
+            st.error("Invalid password. Please try again.")
+            
+      elif st.session_state.selected_login_role == "Admin":
+        email = st.text_input("Corporate Email", value="admin@acmecorp.com")
+        password = st.text_input("Password", type="password", value="")
+
+        col_b1, col_b2 = st.columns([1, 2])
+        with col_b1:
+          if st.button(" Back", use_container_width=True):
+            st.session_state.selected_login_role = None
+            st.session_state.admin_prev_state = (None, "")
+            st.rerun()
+        with col_b2:
+          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
+
+        current_state = (email, password)
+        previous_state = st.session_state.get("admin_prev_state", (None, ""))
+        enter_pressed = (password != "") and (current_state != previous_state)
+
+        if signin_clicked or enter_pressed:
+          st.session_state.admin_prev_state = current_state
+          if email.strip():
             if verify_credentials(email, password):
               st.session_state.logged_in = True
               st.session_state.email = email
-              st.session_state.role = "Employee"
-              st.query_params["email"] = st.session_state.email
-              st.query_params["role"] = st.session_state.role
+              st.session_state.role = "Admin"
+              st.query_params["email"] = email
+              st.query_params["role"] = "Admin"
               
               # Calculate secure token to survive refreshes
               import hashlib
@@ -1470,48 +1524,12 @@ if not st.session_state.logged_in:
               except Exception:
                 pass
                 
+              st.session_state.admin_prev_state = (None, "")
               st.rerun()
             else:
-              st.error("Invalid password. Please try again.")
-            
-      elif st.session_state.selected_login_role == "Admin":
-        email = st.text_input("Corporate Email", value="admin@acmecorp.com")
-        password = st.text_input("Password", type="password", value="")
-
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
-            st.session_state.selected_login_role = None
-            st.rerun()
-        with col_b2:
-          if st.button("Sign In", type="primary", use_container_width=True):
-            if email.strip():
-              if verify_credentials(email, password):
-                st.session_state.logged_in = True
-                st.session_state.email = email
-                st.session_state.role = "Admin"
-                st.query_params["email"] = email
-                st.query_params["role"] = "Admin"
-                
-                # Calculate secure token to survive refreshes
-                import hashlib
-                try:
-                  with sqlite3.connect(_db_path()) as conn:
-                    cur = conn.cursor()
-                    cur.execute("SELECT password_hash FROM users WHERE email = ?", (email.strip(),))
-                    row = cur.fetchone()
-                    if row:
-                      password_hash = row[0]
-                      token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
-                      st.query_params["token"] = token
-                except Exception:
-                  pass
-                  
-                st.rerun()
-              else:
-                st.error("Invalid email or password.")
-            else:
-              st.error("Please enter a valid email.")
+              st.error("Invalid email or password.")
+          else:
+            st.error("Please enter a valid email.")
 
 
   st.stop()
