@@ -113,16 +113,29 @@ def check_duplicate(amount: float, date: str, submitter: str, description: str) 
 class ExpenseReport(BaseModel):
     amount: float = Field(description="The amount of the expense.")
     currency: str = Field(description="The currency of the expense (e.g., USD, EUR). Defaults to USD.", default="USD")
+    vendor: str = Field(description="The name of the vendor or merchant from the receipt or invoice.", default="")
     submitter: str = Field(description="The name or email of the person submitting the expense.")
     category: str = Field(description="The category of the expense. MUST be exactly one of: 'Meals', 'Travel', 'Equipment', 'Office Supplies', 'Software', or 'Miscellaneous'. Do not use hyphens.")
     description: str = Field(description="The description or justification for the expense.")
     date: str = Field(description="The date of the expense.")
+    
+    ocr_amount: float | None = None
+    ocr_currency: str | None = None
+    ocr_vendor: str | None = None
+    ocr_category: str | None = None
+    ocr_date: str | None = None
+    
+    # UI Resubmission Fields
+    is_ui_resubmit: bool = False
+    original_amount: float | None = None
+    original_currency: str | None = None
+    exchange_rate: float | None = None
 
-def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, str]:
-    """Convert amount to USD using Frankfurter API. Returns (usd_amount, note_to_append)."""
+def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, float, str]:
+    """Convert amount to USD using Frankfurter API. Returns (usd_amount, exchange_rate, error_note)."""
     currency = currency.upper().strip()
     if currency == "USD":
-        return amount, ""
+        return amount, 1.0, ""
     try:
         import urllib.request
         import json
@@ -132,9 +145,9 @@ def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, str]
             data = json.loads(response.read().decode('utf-8'))
             rate = data['rates']['USD']
             converted = round(amount * rate, 2)
-            return converted, f" [Original: {amount} {currency} converted at {rate} rate]"
+            return converted, rate, ""
     except Exception as e:
-        return amount, f" [Warning: Conversion failed: Currency {currency} not supported by exchange rate API. Amount defaulted to 1:1.]"
+        return amount, 1.0, f"Conversion failed: Currency {currency} not supported by exchange rate API. Amount defaulted to 1:1."
 
 
 def extract_input_json(node_input: Any) -> dict:
@@ -174,11 +187,22 @@ def extract_input_json(node_input: Any) -> dict:
 
 
 def parse_expense_from_event(event: dict) -> ExpenseReport:
-    """Helper to parse the expense from base64 data key or plain JSON."""
-    if "image_data" in event:
-        image_bytes = base64.b64decode(event["image_data"])
-        mime_type = event.get("mime_type", "image/png")
+    """Parses an expense from an event dict, falling back to LLM if only image is provided."""
+    
+    # Handle inner nesting if payload wraps details inside an 'expense' key at the root
+    if "expense" in event:
+        event = event["expense"]
         
+    if "image_data" in event:
+        # Extract from image using LLM
+        image_data = event["image_data"]
+        mime_type = event.get("mime_type", "image/jpeg")
+        
+        try:
+            image_bytes = base64.b64decode(image_data, validate=True)
+        except Exception:
+            image_bytes = image_data
+
         client = genai.Client(vertexai=use_vertex)
         
         response = client.models.generate_content(
@@ -193,6 +217,11 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
             )
         )
         data_dict = json.loads(response.text)
+        
+        # Prevent LLM from hallucinating ocr_ fields on the first pass
+        for key in ["ocr_amount", "ocr_currency", "ocr_vendor", "ocr_category", "ocr_date"]:
+            data_dict.pop(key, None)
+            
         if "submitter" in event and event["submitter"]:
             data_dict["submitter"] = event["submitter"]
         return ExpenseReport.model_validate(data_dict)
@@ -235,20 +264,20 @@ def parse_expense_node(ctx: Context, node_input: Any):
         expense = parse_expense_from_event(event_dict)
         expense_dict = expense.model_dump()
         
-        # Convert currency if needed
-        currency = expense_dict.get("currency", "USD")
-        expense_dict["original_amount"] = expense_dict["amount"]
-        expense_dict["original_currency"] = currency
-        if currency.upper() != "USD":
-            usd_amount, note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
-            yield Event(
-                content=types.Content(
-                    role="model",
-                    parts=[types.Part.from_text(text=f"💱 **Conversion Applied:** {expense_dict['amount']} {currency.upper()} ≈ **${usd_amount:.2f} USD** (Live Rate)")]
-                )
-            )
-            expense_dict["amount"] = usd_amount
-            expense_dict["description"] = expense_dict.get("description", "") + note
+        # If this is a resubmission from the UI, the amount is ALREADY converted to USD
+        # but the currency dropdown might be set to the original foreign currency.
+        if expense_dict.get("is_ui_resubmit"):
+            # Skip double conversion, just ensure we have the USD amount
+            pass
+        else:
+            # First pass: Convert currency if needed
+            currency = expense_dict.get("currency", "USD")
+            expense_dict["original_amount"] = expense_dict["amount"]
+            expense_dict["original_currency"] = currency
+            if currency.upper() != "USD":
+                usd_amount, rate, err_note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
+                expense_dict["exchange_rate"] = rate
+                expense_dict["amount"] = usd_amount
 
         # Increment run count for sequential testing in the same session
         run_count = ctx.state.get("run_count", 0) + 1
@@ -385,7 +414,58 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     if is_injection:
         redacted.append("Prompt Injection")
 
-    # 3. Check for duplicates
+    # 3. Check for Tampering (if ocr fields exist)
+    tamper_alerts = []
+    if expense.get("ocr_amount") is not None:
+        ocr_amount = float(expense["ocr_amount"])
+        submitted_curr = expense.get("currency", "USD").upper().strip()
+        ocr_curr = expense.get("ocr_currency", "USD").upper().strip()
+        
+        # If UI submitted in USD but original was foreign (or if it's a UI resubmit for a foreign currency), calculate expected USD amount
+        expected_amt = ocr_amount
+        is_ui_resubmit = expense.get("is_ui_resubmit", False)
+        
+        if (submitted_curr == "USD" or is_ui_resubmit) and ocr_curr != "USD" and "exchange_rate" in expense and expense["exchange_rate"] is not None:
+            expected_amt = round(ocr_amount * float(expense["exchange_rate"]), 2)
+            
+        submitted_amt = float(expense["amount"])
+        if submitted_amt != expected_amt:
+            tamper_alerts.append(f"Amount changed from {expected_amt} to {submitted_amt}.")
+            
+        if submitted_curr != ocr_curr:
+            # Do not flag if the change to USD was our automatic UI conversion
+            if not (submitted_curr == "USD" and ocr_curr != "USD" and "exchange_rate" in expense and expense["exchange_rate"] is not None):
+                tamper_alerts.append(f"Currency changed from {ocr_curr} to {submitted_curr}.")
+            
+        submitted_cat = expense.get("category", "").lower().strip()
+        ocr_cat = str(expense.get("ocr_category", "")).lower().strip()
+        if ocr_cat in ["", "none", "miscellaneous"]: ocr_cat = "miscellaneous"
+        if submitted_cat in ["", "none", "miscellaneous"]: submitted_cat = "miscellaneous"
+        if submitted_cat != ocr_cat:
+            tamper_alerts.append(f"Category changed from '{ocr_cat.title()}' to '{submitted_cat.title()}'.")
+            
+        submitted_date = expense.get("date", "")
+        ocr_date = str(expense.get("ocr_date", "")).strip()
+        try:
+            import dateutil.parser
+            d1 = dateutil.parser.parse(submitted_date).date()
+            d2 = dateutil.parser.parse(ocr_date).date()
+            if d1 != d2:
+                tamper_alerts.append(f"Date changed from '{ocr_date}' to '{submitted_date}'.")
+        except Exception:
+            pass
+
+        sub_vendor = expense.get("vendor", "").lower().strip()
+        ocr_vendor = str(expense.get("ocr_vendor", "")).lower().strip()
+        if sub_vendor != ocr_vendor:
+            tamper_alerts.append(f"Vendor changed from '{ocr_vendor.title()}' to '{sub_vendor.title()}'.")
+            
+        if tamper_alerts:
+            tamper_msg = "TAMPER ALERT: The employee manually altered OCR extraction: " + " ".join(tamper_alerts)
+            redacted.append("Tamper Detected")
+            expense["description"] = f"🚨 {tamper_msg}\n\nOriginal Description: {expense.get('description', '')}"
+
+    # 4. Check for duplicates
     is_dup = check_duplicate(
         expense.get("amount", 0.0),
         expense.get("date", ""),
@@ -533,6 +613,22 @@ async def risk_review_node(ctx: Context, node_input: dict) -> Event:
         },
         state={"risk_assessment": risk_assessment}
     )
+
+
+@node
+async def employee_review_gate(ctx: Context, node_input: dict):
+    """Pauses the workflow to let the employee review the OCR extraction before submission."""
+    expense = node_input["expense"]
+    
+    # If ocr_amount is missing, this is the very first pass (image extraction).
+    # We must pause here so the employee can review and edit in the UI.
+    if expense.get("ocr_amount") is None:
+        interrupt_id = "employee_review"
+        msg = f"Review required\n---JSON---\n{json.dumps(expense)}"
+        yield RequestInput(interrupt_id=interrupt_id, message=msg)
+    else:
+        # This is a resubmission from the UI, skip the pause and proceed to security check
+        yield Event(output=node_input)
 
 
 @node
@@ -699,8 +795,9 @@ root_agent = Workflow(
     rerun_on_resume=False,
     edges=[
         Edge(from_node=START, to_node=parse_expense_node),
-        # All expenses go through the security checkpoint FIRST
-        Edge(from_node=parse_expense_node, to_node=security_checkpoint_node),
+        Edge(from_node=parse_expense_node, to_node=employee_review_gate),
+        # All expenses go through the security checkpoint FIRST (after employee review)
+        Edge(from_node=employee_review_gate, to_node=security_checkpoint_node),
         # If security event (PII or injection): skip dollar check, go straight to human review
         Edge(from_node=security_checkpoint_node, to_node=human_approval_gate, route="security_escalation"),
         # If clean: proceed to dollar-threshold routing
