@@ -54,7 +54,8 @@ async def test_agent_stream_query(agent_app: AgentEngineApp) -> None:
         "submitter": "alice@example.com",
         "category": "Meals",
         "description": "Lunch meeting with client",
-        "date": "2026-06-18"
+        "date": "2026-06-18",
+        "is_manual_submit": True
     }
     message = json.dumps(expense_payload)
     events = []

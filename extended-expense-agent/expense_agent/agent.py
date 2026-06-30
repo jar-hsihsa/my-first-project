@@ -161,6 +161,7 @@ class ExpenseReport(BaseModel):
     
     # UI Resubmission Fields
     is_ui_resubmit: bool = False
+    is_manual_submit: bool = False
     original_amount: float | None = None
     original_currency: str | None = None
     exchange_rate: float | None = None
@@ -252,9 +253,11 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
         )
         data_dict = json.loads(response.text)
         
-        # Prevent LLM from hallucinating ocr_ fields on the first pass
+        # Prevent LLM from hallucinating ocr_ fields or manual submit flags on the first pass
         for key in ["ocr_amount", "ocr_currency", "ocr_vendor", "ocr_category", "ocr_date"]:
             data_dict.pop(key, None)
+        data_dict["is_manual_submit"] = False
+        data_dict["is_ui_resubmit"] = False
             
         if "submitter" in event and event["submitter"]:
             data_dict["submitter"] = event["submitter"]
@@ -691,15 +694,15 @@ async def employee_review_gate(ctx: Context, node_input: dict):
     """Pauses the workflow to let the employee review the OCR extraction before submission."""
     expense = node_input["expense"]
     
-    # If ocr_amount is missing, this is the very first pass (image extraction).
-    # We must pause here so the employee can review and edit in the UI.
-    if expense.get("ocr_amount") is None:
+    # Bypass the pause if this is a manual submission or has already been reviewed
+    if expense.get("is_manual_submit") or expense.get("ocr_amount") is not None:
+        yield Event(output=node_input)
+    else:
+        # If ocr_amount is missing, this is the very first pass (image extraction).
+        # We must pause here so the employee can review and edit in the UI.
         interrupt_id = "employee_review"
         msg = f"Review required\n---JSON---\n{json.dumps(expense)}"
         yield RequestInput(interrupt_id=interrupt_id, message=msg)
-    else:
-        # This is a resubmission from the UI, skip the pause and proceed to security check
-        yield Event(output=node_input)
 
 
 @node
