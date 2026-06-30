@@ -1852,7 +1852,7 @@ if st.session_state.role == "Employee":
 
       if exp_currency != "USD":
         from expense_agent.agent import convert_to_usd
-        converted_amt, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
+        converted_amt, _, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
         st.markdown(
             f"""<div style="background-color: rgba(37,99,235,0.05); padding: 0.5rem 0.75rem; border-radius: 6px; margin-top: -0.5rem; margin-bottom: 1rem; border: 1px dashed rgba(37,99,235,0.3); font-size: 0.85rem;">
             💱 <strong>Conversion Estimate:</strong> {exp_amount:.2f} {exp_currency} ≈ <strong>${converted_amt:.2f} USD</strong> (Live Rate)

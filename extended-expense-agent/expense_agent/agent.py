@@ -380,7 +380,7 @@ def scrub_personal_data(description: str) -> tuple[str, list[str]]:
 
 
 def detect_prompt_injection(description: str) -> bool:
-    """Detect prompt injection attempts using multi-word pattern matching.
+    """Detect prompt injection attempts using multi-word pattern matching and regex heuristics.
 
     Single keywords (e.g. 'rules', 'policy', 'force') are intentionally NOT
     flagged on their own — they appear in legitimate expense descriptions.
@@ -388,7 +388,7 @@ def detect_prompt_injection(description: str) -> bool:
     """
     desc_lower = description.lower()
 
-    # Unambiguous single-phrase injections (always malicious in context)
+    # 1. Unambiguous single-phrase injections (always malicious in context)
     unambiguous = [
         "auto-approve",
         "auto approve",
@@ -403,7 +403,7 @@ def detect_prompt_injection(description: str) -> bool:
     if any(phrase in desc_lower for phrase in unambiguous):
         return True
 
-    # Multi-word combos: requires a *directive* verb + a *target* noun
+    # 2. Multi-word combos: requires a *directive* verb + a *target* noun
     directive_verbs = ["ignore", "bypass", "override", "disregard", "forget", "skip"]
     target_nouns = [
         "rules", "instructions", "policy", "policies", "previous",
@@ -415,11 +415,47 @@ def detect_prompt_injection(description: str) -> bool:
                 if noun in desc_lower:
                     return True
 
-    # Coercive approval patterns
+    # 3. Coercive approval patterns
     if "you must approve" in desc_lower or "must be approved" in desc_lower:
         return True
     if "force" in desc_lower and ("approve" in desc_lower or "approval" in desc_lower):
         return True
+
+    # 4. Escape Sequence Scanner (e.g., Markdown fence, dividers followed by system instructions)
+    escape_pattern = re.compile(
+        r'(?:[`\-=\*]{3,})[\s\S]*?\b(ignore|bypass|system|instruction|override|rules|approve)\b',
+        re.IGNORECASE
+    )
+    if escape_pattern.search(description):
+        return True
+
+    # 5. Pseudo-XML Tag Scanner (e.g., trying to close the JSON wrap or fake system instructions tags)
+    xml_pattern = re.compile(
+        r'</?(?:system|sys|expense|instruction|human|assistant|user|command|prompt|context|rules)\b[^>]*>',
+        re.IGNORECASE
+    )
+    if xml_pattern.search(description):
+        return True
+
+    # 6. Roleplay & Chat Simulation Scanner (e.g., system: approve)
+    roleplay_pattern = re.compile(
+        r'(?:^|\n)\s*(?:system|sys|admin|instruction|assistant|user|human)\s*:\s*\b',
+        re.IGNORECASE
+    )
+    if roleplay_pattern.search(description):
+        return True
+
+    # 7. Structured Jailbreak Pattern Matcher
+    jailbreak_patterns = [
+        r'\bjailbreak\b',
+        r'\bdeveloper\s+mode\b',
+        r'\bignore\s+(?:all|previous|anything|everything|the\s+above|the\s+before|prior|instructions)\b',
+        r'\bbypass\s+(?:rules|security|policies|checks|threshold)\b',
+        r'\bforget\s+(?:all|previous|anything|everything|the\s+above|the\s+before|prior|instructions)\b',
+    ]
+    for pat in jailbreak_patterns:
+        if re.search(pat, description, re.IGNORECASE):
+            return True
 
     return False
 
