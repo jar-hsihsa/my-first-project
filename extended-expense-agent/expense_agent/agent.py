@@ -66,6 +66,12 @@ _DB_PATH: str = os.path.join(
 )
 
 
+def hash_password(password: str) -> str:
+    """Helper to hash password with SHA-256."""
+    import hashlib
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 def init_db():
     """Create required tables if they don't already exist."""
     with sqlite3.connect(_DB_PATH) as conn:
@@ -92,7 +98,46 @@ def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                name TEXT,
+                role TEXT,
+                password_hash TEXT
+            )
+        """)
+        # Bug #17: Opaque session token store — avoids exposing credential-derived hashes in URL
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ui_sessions (
+                session_token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME NOT NULL
+            )
+        """)
         conn.commit()
+
+        # Check if users table is empty and seed if necessary
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            default_users = [
+                ("employee1@acmecorp.com", "Employee 1", "Employee", hash_password("emp1pass")),
+                ("employee2@acmecorp.com", "Employee 2", "Employee", hash_password("emp2pass")),
+                ("employee3@acmecorp.com", "Employee 3", "Employee", hash_password("emp3pass")),
+                ("employee4@acmecorp.com", "Employee 4", "Employee", hash_password("emp4pass")),
+                ("employee5@acmecorp.com", "Employee 5", "Employee", hash_password("emp5pass")),
+                ("employee6@acmecorp.com", "Employee 6", "Employee", hash_password("emp6pass")),  # Bug #19: Employee 6 was missing
+                ("employee7@acmecorp.com", "Employee 7", "Employee", hash_password("emp7pass")),
+                ("admin@acmecorp.com", "Acme Admin", "Admin", hash_password("adminpass")),
+            ]
+            conn.executemany(
+                "INSERT INTO users (email, name, role, password_hash) VALUES (?, ?, ?, ?)",
+                default_users
+            )
+            conn.commit()
 
 
 def check_duplicate(amount: float, date: str, submitter: str, description: str) -> bool:
@@ -111,11 +156,49 @@ def check_duplicate(amount: float, date: str, submitter: str, description: str) 
 
 
 class ExpenseReport(BaseModel):
-    amount: float = Field(description="The dollar amount of the expense.")
+    amount: float = Field(description="The amount of the expense.")
+    currency: str = Field(description="The currency of the expense (e.g., USD, EUR). Defaults to USD.", default="USD")
+    vendor: str = Field(description="The name of the vendor or merchant from the receipt or invoice.", default="")
     submitter: str = Field(description="The name or email of the person submitting the expense.")
     category: str = Field(description="The category of the expense. MUST be exactly one of: 'Meals', 'Travel', 'Equipment', 'Office Supplies', 'Software', or 'Miscellaneous'. Do not use hyphens.")
     description: str = Field(description="The description or justification for the expense.")
     date: str = Field(description="The date of the expense.")
+    
+    ocr_amount: float | None = None
+    ocr_currency: str | None = None
+    ocr_vendor: str | None = None
+    ocr_category: str | None = None
+    ocr_date: str | None = None
+    
+    # UI Resubmission Fields
+    is_ui_resubmit: bool = False
+    is_manual_submit: bool = False
+    original_amount: float | None = None
+    original_currency: str | None = None
+    exchange_rate: float | None = None
+
+def _blocking_fetch_rate(currency: str) -> float:
+    """Blocking HTTP fetch for exchange rate. Run via run_in_executor to avoid blocking event loop (Bug #15)."""
+    import urllib.request
+    url = f"https://open.er-api.com/v6/latest/{currency}"
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=5) as response:
+        data = json.loads(response.read().decode('utf-8'))
+        return data['rates']['USD']
+
+
+def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, float, str]:
+    """Convert amount to USD using exchange rate API. Returns (usd_amount, exchange_rate, error_note)."""
+    currency = currency.upper().strip()
+    if currency == "USD":
+        return amount, 1.0, ""
+    try:
+        import urllib.request
+        rate = _blocking_fetch_rate(currency)
+        converted = round(amount * rate, 2)
+        return converted, rate, ""
+    except Exception as e:
+        return amount, 1.0, f"Conversion failed: Currency {currency} not supported by exchange rate API. Amount defaulted to 1:1."
 
 
 def extract_input_json(node_input: Any) -> dict:
@@ -155,17 +238,29 @@ def extract_input_json(node_input: Any) -> dict:
 
 
 def parse_expense_from_event(event: dict) -> ExpenseReport:
-    """Helper to parse the expense from base64 data key or plain JSON."""
-    if "image_data" in event:
-        image_bytes = base64.b64decode(event["image_data"])
-        mime_type = event.get("mime_type", "image/png")
+    """Parses an expense from an event dict, falling back to LLM if only image is provided."""
+    
+    # Handle inner nesting if payload wraps details inside an 'expense' key at the root
+    if "expense" in event:
+        event = event["expense"]
         
+    if "image_data" in event:
+        # Extract from image using LLM
+        image_data = event["image_data"]
+        mime_type = event.get("mime_type", "image/jpeg")
+        
+        try:
+            image_bytes = base64.b64decode(image_data, validate=True)
+        except Exception:
+            image_bytes = image_data
+
         client = genai.Client(vertexai=use_vertex)
+        
         response = client.models.generate_content(
             model=MODEL_NAME,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                "Extract the expense details from this receipt. You MUST extract the date (standardized to YYYY-MM-DD format) and category alongside the amount field. If the submitter/employee email is not on the receipt, set it to 'employee@acmecorp.com'. If you cannot clearly identify a category from the receipt, you MUST default to 'Miscellaneous'. Do not leave the category blank or use a hyphen."
+                "Extract the expense details from this receipt. You MUST extract the date (standardized to YYYY-MM-DD format) and category alongside the amount field. Also extract the currency of the transaction (e.g., USD, EUR, GBP, JPY). If not explicitly stated but implied, infer it. Default to USD if completely unknown. If the submitter/employee email is not on the receipt, set it to 'employee@acmecorp.com'. If you cannot clearly identify a category from the receipt, you MUST default to 'Miscellaneous'. Do not leave the category blank or use a hyphen."
             ],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -173,6 +268,13 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
             )
         )
         data_dict = json.loads(response.text)
+        
+        # Prevent LLM from hallucinating ocr_ fields or manual submit flags on the first pass
+        for key in ["ocr_amount", "ocr_currency", "ocr_vendor", "ocr_category", "ocr_date"]:
+            data_dict.pop(key, None)
+        data_dict["is_manual_submit"] = False
+        data_dict["is_ui_resubmit"] = False
+            
         if "submitter" in event and event["submitter"]:
             data_dict["submitter"] = event["submitter"]
         return ExpenseReport.model_validate(data_dict)
@@ -207,7 +309,7 @@ def parse_expense_from_event(event: dict) -> ExpenseReport:
 
 
 @node
-def parse_expense_node(ctx: Context, node_input: Any) -> Event:
+def parse_expense_node(ctx: Context, node_input: Any):
     """Decodes the incoming event payload and parses the expense report."""
     try:
         # Try to parse the input as a new expense payload
@@ -215,11 +317,29 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
         expense = parse_expense_from_event(event_dict)
         expense_dict = expense.model_dump()
         
+        # If this is a resubmission from the UI, the amount is ALREADY converted to USD
+        # but the currency dropdown might be set to the original foreign currency.
+        if expense_dict.get("is_ui_resubmit"):
+            # Skip double conversion, just ensure we have the USD amount
+            pass
+        else:
+            # First pass: Convert currency if needed
+            currency = expense_dict.get("currency", "USD")
+            expense_dict["original_amount"] = expense_dict["amount"]
+            expense_dict["original_currency"] = currency
+            if currency.upper() != "USD":
+                usd_amount, rate, err_note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
+                expense_dict["exchange_rate"] = rate
+                expense_dict["amount"] = usd_amount
+                # Bug #2: Surface conversion failure so admin/employee can see it
+                if err_note:
+                    expense_dict["description"] = f"[Warning: {err_note}] {expense_dict.get('description', '')}"
+
         # Increment run count for sequential testing in the same session
         run_count = ctx.state.get("run_count", 0) + 1
         
         # If successful, reset state keys for a new evaluation run in the same session
-        return Event(
+        yield Event(
             output={"expense": expense_dict},
             state={
                 "expense": expense_dict,
@@ -233,9 +353,9 @@ def parse_expense_node(ctx: Context, node_input: Any) -> Event:
     except Exception as e:
         # If parsing fails, it's likely a resume input (e.g. "Approve"), fallback to cached state
         if ctx.state.get("expense"):
-            return Event(output={"expense": ctx.state["expense"]})
-            
-        raise ValueError(f"Error parsing expense receipt/payload: {e}")
+            yield Event(output={"expense": ctx.state["expense"]})
+        else:
+            raise ValueError(f"Error parsing expense receipt/payload: {e}")
 
 def is_luhn_valid(cc_str: str) -> bool:
     """Validate credit card number using Luhn algorithm."""
@@ -282,7 +402,7 @@ def scrub_personal_data(description: str) -> tuple[str, list[str]]:
 
 
 def detect_prompt_injection(description: str) -> bool:
-    """Detect prompt injection attempts using multi-word pattern matching.
+    """Detect prompt injection attempts using multi-word pattern matching and regex heuristics.
 
     Single keywords (e.g. 'rules', 'policy', 'force') are intentionally NOT
     flagged on their own — they appear in legitimate expense descriptions.
@@ -290,7 +410,7 @@ def detect_prompt_injection(description: str) -> bool:
     """
     desc_lower = description.lower()
 
-    # Unambiguous single-phrase injections (always malicious in context)
+    # 1. Unambiguous single-phrase injections (always malicious in context)
     unambiguous = [
         "auto-approve",
         "auto approve",
@@ -305,7 +425,7 @@ def detect_prompt_injection(description: str) -> bool:
     if any(phrase in desc_lower for phrase in unambiguous):
         return True
 
-    # Multi-word combos: requires a *directive* verb + a *target* noun
+    # 2. Multi-word combos: requires a *directive* verb + a *target* noun
     directive_verbs = ["ignore", "bypass", "override", "disregard", "forget", "skip"]
     target_nouns = [
         "rules", "instructions", "policy", "policies", "previous",
@@ -317,11 +437,47 @@ def detect_prompt_injection(description: str) -> bool:
                 if noun in desc_lower:
                     return True
 
-    # Coercive approval patterns
+    # 3. Coercive approval patterns
     if "you must approve" in desc_lower or "must be approved" in desc_lower:
         return True
     if "force" in desc_lower and ("approve" in desc_lower or "approval" in desc_lower):
         return True
+
+    # 4. Escape Sequence Scanner (e.g., Markdown fence, dividers followed by system instructions)
+    escape_pattern = re.compile(
+        r'(?:[`\-=\*]{3,})[\s\S]*?\b(ignore|bypass|system|instruction|override|rules|approve)\b',
+        re.IGNORECASE
+    )
+    if escape_pattern.search(description):
+        return True
+
+    # 5. Pseudo-XML Tag Scanner (e.g., trying to close the JSON wrap or fake system instructions tags)
+    xml_pattern = re.compile(
+        r'</?(?:system|sys|expense|instruction|human|assistant|user|command|prompt|context|rules)\b[^>]*>',
+        re.IGNORECASE
+    )
+    if xml_pattern.search(description):
+        return True
+
+    # 6. Roleplay & Chat Simulation Scanner (e.g., system: approve)
+    roleplay_pattern = re.compile(
+        r'(?:^|\n)\s*(?:system|sys|admin|instruction|assistant|user|human)\s*:\s*\b',
+        re.IGNORECASE
+    )
+    if roleplay_pattern.search(description):
+        return True
+
+    # 7. Structured Jailbreak Pattern Matcher
+    jailbreak_patterns = [
+        r'\bjailbreak\b',
+        r'\bdeveloper\s+mode\b',
+        r'\bignore\s+(?:all|previous|anything|everything|the\s+above|the\s+before|prior|instructions)\b',
+        r'\bbypass\s+(?:rules|security|policies|checks|threshold)\b',
+        r'\bforget\s+(?:all|previous|anything|everything|the\s+above|the\s+before|prior|instructions)\b',
+    ]
+    for pat in jailbreak_patterns:
+        if re.search(pat, description, re.IGNORECASE):
+            return True
 
     return False
 
@@ -337,6 +493,16 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     expense = node_input["expense"]
     desc = expense.get("description", "")
     
+    # Bug #5: Check for duplicates BEFORE scrubbing so the canonical description is used.
+    # If scrubbing happens first, two identical expenses (one with PII, one without) get
+    # different descriptions after scrubbing and the duplicate is not detected.
+    is_dup = check_duplicate(
+        expense.get("amount", 0.0),
+        expense.get("date", ""),
+        expense.get("submitter", ""),
+        expense.get("description", ""),
+    )
+
     # 1. Scrub personal data
     clean_desc, redacted = scrub_personal_data(desc)
     expense["description"] = clean_desc
@@ -350,15 +516,65 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     if is_injection:
         redacted.append("Prompt Injection")
 
-    # 3. Check for duplicates
-    is_dup = check_duplicate(
-        expense.get("amount", 0.0),
-        expense.get("date", ""),
-        expense.get("submitter", ""),
-        expense.get("description", ""),
-    )
+    # 3. Check for Tampering (if ocr fields exist)
+    tamper_alerts = []
+    if expense.get("ocr_amount") is not None:
+        ocr_amount = float(expense["ocr_amount"])
+        submitted_curr = expense.get("currency", "USD").upper().strip()
+        ocr_curr = expense.get("ocr_currency", "USD").upper().strip()
+        
+        # If UI submitted in USD but original was foreign (or if it's a UI resubmit for a foreign currency), calculate expected USD amount
+        expected_amt = ocr_amount
+        is_ui_resubmit = expense.get("is_ui_resubmit", False)
+        
+        if (submitted_curr == "USD" or is_ui_resubmit) and ocr_curr != "USD" and "exchange_rate" in expense and expense["exchange_rate"] is not None:
+            expected_amt = round(ocr_amount * float(expense["exchange_rate"]), 2)
+            
+        submitted_amt = float(expense["amount"])
+        # Bug #7: Use tolerance for float comparison to avoid false tamper alerts
+        # from floating-point rounding during currency conversion
+        if abs(submitted_amt - expected_amt) > 0.01:
+            tamper_alerts.append(f"Amount changed from {expected_amt} to {submitted_amt}.")
+            
+        if submitted_curr != ocr_curr:
+            # Do not flag if the change to USD was our automatic UI conversion
+            if not (submitted_curr == "USD" and ocr_curr != "USD" and "exchange_rate" in expense and expense["exchange_rate"] is not None):
+                tamper_alerts.append(f"Currency changed from {ocr_curr} to {submitted_curr}.")
+            
+        submitted_cat = expense.get("category", "").lower().strip()
+        ocr_cat = str(expense.get("ocr_category", "")).lower().strip()
+        if ocr_cat in ["", "none", "miscellaneous"]: ocr_cat = "miscellaneous"
+        if submitted_cat in ["", "none", "miscellaneous"]: submitted_cat = "miscellaneous"
+        if submitted_cat != ocr_cat:
+            tamper_alerts.append(f"Category changed from '{ocr_cat.title()}' to '{submitted_cat.title()}'.")
+            
+        submitted_date = expense.get("date", "")
+        ocr_date = str(expense.get("ocr_date", "")).strip()
+        try:
+            from datetime import datetime
+            import dateutil.parser
+            d1 = datetime.strptime(submitted_date, "%Y-%m-%d").date()
+            d2 = dateutil.parser.parse(ocr_date).date()
+            if d1 != d2:
+                tamper_alerts.append(f"Date changed from '{ocr_date}' to '{submitted_date}'.")
+        except Exception:
+            pass
+
+        sub_vendor = expense.get("vendor", "").lower().strip()
+        ocr_vendor = str(expense.get("ocr_vendor", "")).lower().strip()
+        if sub_vendor != ocr_vendor:
+            tamper_alerts.append(f"Vendor changed from '{ocr_vendor.title()}' to '{sub_vendor.title()}'.")
+            
+        if tamper_alerts:
+            tamper_msg = "TAMPER ALERT: The employee manually altered OCR extraction: " + " ".join(tamper_alerts)
+            redacted.append("Tamper Detected")
+            expense["description"] = f"🚨 {tamper_msg}\n\nOriginal Description: {expense.get('description', '')}"
+
+    # 4. Check for duplicates (moved before scrub — see Bug #5 fix above)
     if is_dup:
         redacted.append("Duplicate Expense")
+        # Also mark the description so admin can immediately see it's a duplicate
+        expense["description"] = f"⚠️ DUPLICATE SUBMISSION: {expense.get('description', '')}"
 
     # Update output with the final (possibly extended) violations list
     output_data = {
@@ -374,7 +590,7 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     if has_violations:
         # redacted now contains ALL violations e.g. ["SSN", "Credit Card", "Prompt Injection"]
         risk_msg = (
-            f"CRITICAL RISK: Violations detected — {', '.join(redacted)}. "
+            "CRITICAL RISK: Security policy violation detected. "
             "Escalated for human review."
         )
 
@@ -501,6 +717,25 @@ async def risk_review_node(ctx: Context, node_input: dict) -> Event:
 
 
 @node
+async def employee_review_gate(ctx: Context, node_input: dict):
+    """Pauses the workflow to let the employee review the OCR extraction before submission."""
+    expense = node_input["expense"]
+    
+    # Bypass the pause if this is a manual submission or has already been reviewed.
+    # NOTE (Bug #8): ocr_amount presence means the employee has already reviewed the
+    # OCR extraction once. The security_checkpoint_node later validates all submitted
+    # fields against the original OCR values to detect any tampering.
+    if expense.get("is_manual_submit") or expense.get("ocr_amount") is not None:
+        yield Event(output=node_input)
+    else:
+        # If ocr_amount is missing, this is the very first pass (image extraction).
+        # We must pause here so the employee can review and edit in the UI.
+        interrupt_id = "employee_review"
+        msg = f"Review required\n---JSON---\n{json.dumps(expense)}"
+        yield RequestInput(interrupt_id=interrupt_id, message=msg)
+
+
+@node
 async def human_approval_gate(ctx: Context, node_input: dict):
     """Pauses workflow to await manual human approval or rejection."""
     expense = node_input["expense"]
@@ -547,7 +782,10 @@ def outcome_node(ctx: Context, node_input: Any):
         expense = ctx.state.get("expense", {})
         risk = ctx.state.get("risk_assessment", "N/A")
         decision_text = str(node_input)
-        decision = "Approved" if "approve" in decision_text.lower() else "Rejected"
+        # Bug #6: Expand affirmative keywords so common natural-language approvals
+        # ("Yes", "OK", "looks good") are not silently classified as Rejected.
+        _affirmatives = ("approve", "approved", "yes", "ok", "looks good", "fine", "accept", "accepted")
+        decision = "Approved" if any(word in decision_text.lower() for word in _affirmatives) else "Rejected"
         reason = f"Decision made by human reviewer: {decision_text}"
     
     is_security_event = ctx.state.get("is_security_event", False)
@@ -568,15 +806,8 @@ def outcome_node(ctx: Context, node_input: Any):
     if redacted:
         content_text += f"- **Redacted Info**: {', '.join(redacted)}\n"
     if is_security_event:
-        # Build security label directly from state flags — not from string parsing
-        if is_injection and has_pii:
-            sec_label = f"⚠️ CRITICAL RISK: PII Detected ({', '.join(redacted)}) AND Prompt Injection Attempted"
-        elif is_injection:
-            sec_label = "⚠️ CRITICAL RISK: Prompt Injection Attempted"
-        elif has_pii:
-            sec_label = f"⚠️ CRITICAL RISK: PII Data Detected ({', '.join(redacted)})"
-        else:
-            sec_label = "⚠️ FLAGGED SECURITY EVENT"
+        # Build security label directly from state flags — generic for security
+        sec_label = "⚠️ CRITICAL RISK: Request flagged for manual review due to security policy."
         content_text += f"- **Security Status**: {sec_label}\n"
     content_text += f"- **Risk Assessment**: {risk}\n"
     
@@ -629,18 +860,24 @@ def notification_node(ctx: Context, node_input: dict) -> Event:
     """Mock node that formats and logs an email notification summarizing the outcome."""
     expense = node_input["expense"]
     decision = node_input["decision"]
-    reason = node_input["reason"]
-    risk = node_input["risk_assessment"]
+    # Bug #1: Use .get() to avoid KeyError on unexpected code paths
+    reason = node_input.get("reason", "N/A")
+    risk = node_input.get("risk_assessment", "N/A")
     submitter = expense.get("submitter", "employee@acmecorp.com")
     
     email_subject = f"Notification: Your Expense Report has been {decision}"
+    
+    amount_str = f"${expense.get('amount', 0.0)}"
+    if expense.get("original_currency") and expense.get("original_currency").upper() != "USD":
+        amount_str = f"{expense.get('original_amount')} {expense.get('original_currency')} (Converted to ${expense.get('amount', 0.0)} USD)"
+
     email_body = (
         f"To: {submitter}\n"
         f"From: expense-system@acmecorp.com\n"
         f"Subject: {email_subject}\n\n"
         f"Dear Employee,\n\n"
         f"Your expense report submitted on {expense.get('date', 'N/A')} for the amount of "
-        f"${expense.get('amount', 0.0)} ({expense.get('category', 'N/A')}) has been {decision}.\n\n"
+        f"{amount_str} ({expense.get('category', 'N/A')}) has been {decision}.\n\n"
         f"Reason: {reason}\n"
         f"Risk Assessment Details: {risk}\n\n"
         f"Regards,\n"
@@ -666,8 +903,9 @@ root_agent = Workflow(
     rerun_on_resume=False,
     edges=[
         Edge(from_node=START, to_node=parse_expense_node),
-        # All expenses go through the security checkpoint FIRST
-        Edge(from_node=parse_expense_node, to_node=security_checkpoint_node),
+        Edge(from_node=parse_expense_node, to_node=employee_review_gate),
+        # All expenses go through the security checkpoint FIRST (after employee review)
+        Edge(from_node=employee_review_gate, to_node=security_checkpoint_node),
         # If security event (PII or injection): skip dollar check, go straight to human review
         Edge(from_node=security_checkpoint_node, to_node=human_approval_gate, route="security_escalation"),
         # If clean: proceed to dollar-threshold routing
