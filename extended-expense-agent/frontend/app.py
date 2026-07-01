@@ -17,6 +17,21 @@ nest_asyncio.apply()
 from expense_agent.agent_runtime_app import agent_runtime
 from expense_agent.agent import init_db
 
+from frontend.database import (
+    _db_path, get_employee_expenses, get_all_expenses, save_expense, 
+    save_pending_approval, get_pending_count, get_all_pending_approvals, delete_pending_approval
+)
+from frontend.auth import (
+    create_ui_session, verify_ui_session, delete_ui_session, verify_credentials
+)
+from frontend.agent_client import (
+    run_agent, process_events, parse_interrupt_details
+)
+from frontend.helpers import (
+    get_base64_image, _esc, _esc_description, get_category_threshold, _initials, _display_name
+)
+
+
 # Bug #3: Load company policies once at module level — avoid 3x file reads per render
 _FRONTEND_POLICIES: dict = {}
 try:
@@ -57,12 +72,6 @@ st.set_page_config(
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "acme_logo.png")
 
-def get_base64_image(image_path):
-    try:
-        with open(image_path, "rb") as img_file:
-            return base64.b64encode(img_file.read()).decode("utf-8")
-    except Exception:
-        return ""
 
 logo_base64 = get_base64_image(LOGO_PATH)
 logo_img_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else ""
@@ -1013,68 +1022,14 @@ for k, v in _defaults.items():
 # ──────────────────────────────────────────────────────────────
 # DB Helpers
 # ──────────────────────────────────────────────────────────────
-def _db_path():
-  dir_path = os.path.dirname(os.path.abspath(__file__))
-  return os.path.join(os.path.dirname(dir_path), "expenses.db")
 
 
 import uuid as _uuid
 
-def create_ui_session(email: str, role: str, hours: int = 8) -> str:
-  """Bug #17: Create an opaque, time-limited session token in the DB.
-  
-  Returns a random UUID string. The URL stores only this token — never the
-  credential-derived hash — so the URL cannot be used to derive passwords.
-  Token expires after `hours` hours (default 8h, a standard work day).
-  """
-  import datetime
-  token = str(_uuid.uuid4())
-  now = datetime.datetime.utcnow()
-  expires = now + datetime.timedelta(hours=hours)
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      # Clean up expired sessions for this user before inserting
-      conn.execute(
-        "DELETE FROM ui_sessions WHERE email = ? OR expires_at < ?",
-        (email, now.isoformat())
-      )
-      conn.execute(
-        "INSERT INTO ui_sessions (session_token, email, role, expires_at) VALUES (?, ?, ?, ?)",
-        (token, email, role, expires.isoformat())
-      )
-      conn.commit()
-  except Exception as e:
-    logging.error(f"create_ui_session error: {e}")
-  return token
 
 
-def verify_ui_session(token: str) -> tuple[str, str] | None:
-  """Bug #17: Verify an opaque session token. Returns (email, role) or None if invalid/expired."""
-  import datetime
-  try:
-    now = datetime.datetime.utcnow().isoformat()
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT email, role FROM ui_sessions WHERE session_token = ? AND expires_at > ?",
-        (token, now)
-      )
-      row = cur.fetchone()
-      if row:
-        return row[0], row[1]  # (email, role)
-  except Exception as e:
-    logging.error(f"verify_ui_session error: {e}")
-  return None
 
 
-def delete_ui_session(token: str) -> None:
-  """Bug #17: Delete a session token on logout."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.execute("DELETE FROM ui_sessions WHERE session_token = ?", (token,))
-      conn.commit()
-  except Exception as e:
-    logging.error(f"delete_ui_session error: {e}")
 
 
 # Bug #17: Opaque session token reload — verifies a short-lived UUID against the DB
@@ -1113,325 +1068,39 @@ if st.session_state.session_id is None:
   st.session_state.session_id = session["id"]
 
 
-def verify_credentials(email: str, password: str) -> bool:
-  """Verify user credentials against SQLite database."""
-  try:
-    hashed_pwd = hashlib.sha256(password.encode("utf-8")).hexdigest()  # Bug #10: hashlib now at module level
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT role FROM users WHERE email = ? AND password_hash = ?",
-        (email.strip(), hashed_pwd),
-      )
-      row = cur.fetchone()
-      return row is not None
-  except Exception as e:
-    # Bug #4: Log the real error so DB/infra issues are not silently swallowed
-    logging.exception(f"verify_credentials error for {email}: {e}")
-    return False
-
-
-def get_employee_expenses(email: str) -> list[dict]:
-  """Return all past expenses for the given submitter email."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.row_factory = sqlite3.Row
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT id, amount, submitter, category, description, date, status FROM expenses WHERE submitter = ? ORDER BY id DESC",
-        (email,),
-      )
-      return [dict(r) for r in cur.fetchall()]
-  except Exception:
-    return []
-
-
-def get_all_expenses() -> list[dict]:
-  """Return all expenses (for admin view)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.row_factory = sqlite3.Row
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT id, amount, submitter, category, description, date, status FROM expenses ORDER BY id DESC"
-      )
-      return [dict(r) for r in cur.fetchall()]
-  except Exception:
-    return []
-
-
-def save_expense(expense: dict, status: str):
-  """Save a newly approved or rejected expense to the database.
-  
-  Uses a context manager to prevent connection leaks (Bug #4).
-  """
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute(
-        "INSERT INTO expenses (amount, submitter, category, description, date, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (
-          expense.get("amount", 0.0),
-          expense.get("submitter", ""),
-          expense.get("category", ""),
-          expense.get("description", ""),
-          expense.get("date", ""),
-          status
-        )
-      )
-      conn.commit()
-  except Exception as e:
-    # Bug #18: use structured logging instead of print() so errors appear in server logs
-    logging.error(f"Error saving expense: {e}")
-
-
-def save_pending_approval(session_id: str, interrupt_id: str, message: str, submitter_email: str, receipt_bytes: str = "", raw_json: str = ""):
-  """Save a pending approval record. Uses context manager to prevent connection leaks (Bug #4)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.execute(
-        "INSERT INTO pending_approvals (session_id, interrupt_id, message, receipt_bytes, submitter_email, raw_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, interrupt_id, message, receipt_bytes, submitter_email, raw_json)
-      )
-      conn.commit()
-  except Exception as e:
-    # Bug #18: use structured logging instead of print()
-    logging.error(f"Error saving pending approval: {e}")
-
-
-def get_pending_count() -> int:
-  """Return count of pending approvals using COUNT(*) — avoids full table scan (Bug #14)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute("SELECT COUNT(*) FROM pending_approvals")
-      return cur.fetchone()[0]
-  except Exception:
-    return 0
 
 
 
-def get_all_pending_approvals() -> list[dict]:
-  """Return all pending approvals ordered by id. Uses context manager (Bug #4)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.row_factory = sqlite3.Row
-      cur = conn.cursor()
-      cur.execute("SELECT * FROM pending_approvals ORDER BY id ASC")
-      return [dict(r) for r in cur.fetchall()]
-  except Exception:
-    return []
-
-def delete_pending_approval(record_id: int):
-  """Delete a pending approval by database row ID. Uses context manager."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.execute("DELETE FROM pending_approvals WHERE id = ?", (record_id,))
-      conn.commit()
-  except Exception:
-    pass
 
 
-def _esc(value: str) -> str:
-  """HTML-escape a string for safe interpolation into unsafe_allow_html markup."""
-  return html_escape(str(value)) if value else "—"
 
 
-def _esc_description(value: str) -> str:
-  """HTML-escape a description string, rendering [Original: ...] and [Warning: ...] notes in styled badges."""
-  escaped = html_escape(str(value)) if value else "—"
-  import re
-  pattern = r'(\[Original:[^\]]+\])'
-  def replacer(match):
-    note = match.group(1)
-    return f'<strong class="conversion-badge">{note}</strong>'
-  
-  pattern_warning = r'(\[Warning:[^\]]+\])'
-  def warning_replacer(match):
-    note = match.group(1)
-    return f'<strong class="conversion-warning-badge">{note}</strong>'
-    
-  formatted = re.sub(pattern, replacer, escaped)
-  formatted = re.sub(pattern_warning, warning_replacer, formatted)
-  return formatted
 
 
-def get_category_threshold(email: str, category: str) -> float:
-  """Get the approval threshold for a category and email domain."""
-  # Bug #3: Use module-level cached policies instead of re-reading file per call
-  # Bug #10: os and json are now at module level, removed inner import
-  policies = _FRONTEND_POLICIES
-
-  domain = "default"
-  if email and "@" in email:
-    domain = email.split("@")[-1].lower()
-
-  company_policy = policies.get(domain, policies.get("default", {}))
-  
-  threshold = company_policy.get("Default", 100.0)
-  for cat_key, val in company_policy.items():
-    if cat_key.lower() == category.lower() and cat_key != "company_name":
-      threshold = val
-      break
-  return threshold
 
 
-def _initials(email: str) -> str:
-  """Generate initials from an email."""
-  name_part = email.split("@")[0]
-  parts = name_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
-  if len(parts) >= 2:
-    return (parts[0][0] + parts[1][0]).upper()
-  return name_part[:2].upper()
 
 
-def _display_name(email: str) -> str:
-  """Generate a display name from an email."""
-  name_part = email.split("@")[0]
-  parts = name_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
-  return " ".join(p.capitalize() for p in parts)
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ──────────────────────────────────────────────────────────────
 # Agent helpers
 # ──────────────────────────────────────────────────────────────
-def run_agent(payload_dict, specific_session_id=None):
-  session_id_to_use = specific_session_id if specific_session_id else st.session_state.session_id
-  
-  async def _run():
-    events = []
-    async for event in agent_runtime.async_stream_query(
-      message=payload_dict,
-      user_id="streamlit_user",
-      session_id=session_id_to_use,
-    ):
-      events.append(event)
-    return events
-    
-  return asyncio.run(_run())
 
 
-def process_events(events, run_session_id=None, submitter_email=None):
-  final_output = None
-  paused = False
-  session_to_track = run_session_id if run_session_id else st.session_state.session_id
-
-  for event in events:
-    content = event.get("content")
-    if content and "parts" in content:
-      for part in content["parts"]:
-        if "text" in part:
-          st.session_state.agent_messages.append(part["text"])
-        if "function_call" in part:
-          fn_call = part["function_call"]
-          if fn_call.get("name") == "adk_request_input":
-            args = fn_call.get("args", {})
-            st.session_state.interrupt_message = args.get(
-              "message", "Agent paused for human input."
-            )
-            st.session_state.interrupt_id = fn_call.get("id")
-            paused = True
-            
-            receipt_bytes = st.session_state.get("submitted_receipt_image", "")
-            raw_json = st.session_state.get("raw_json", "")
-            if "---JSON---" in st.session_state.interrupt_message:
-              parts = st.session_state.interrupt_message.split("---JSON---")
-              st.session_state.interrupt_message = parts[0].strip()
-              raw_json = parts[1].strip()
-              # Update session state with parsed values for future use if needed
-              st.session_state.raw_json = raw_json
 
 
-            if (
-              st.session_state.role == "Employee"
-              and not st.session_state.get("from_review_submit", False)
-              and (
-                args.get("interruptId") == "employee_review"
-                or args.get("interrupt_id") == "employee_review"
-                or fn_call.get("id") == "employee_review"
-              )
-            ):
-              import json
-              try:
-                st.session_state.review_expense_data = json.loads(raw_json)
-                st.session_state.review_session_to_track = session_to_track
-                st.session_state.review_is_paused = True
-                st.session_state.review_interrupt_id = fn_call.get("id")
-              except Exception:
-                pass
-            else:
-              save_pending_approval(
-                session_to_track,
-                fn_call.get("id"),
-                st.session_state.interrupt_message,
-                st.session_state.email,
-                receipt_bytes,
-                raw_json
-              )
-              try:
-                raw_json_data = json.loads(raw_json)
-                if raw_json_data.get("is_manual_submit"):
-                  st.session_state.manual_submit_success = True
-              except Exception:
-                pass
-
-    if "output" in event:
-      final_output = event["output"]
-
-  st.session_state.waiting_for_input = paused
-  if not paused and final_output:
-    st.session_state.final_output = final_output
-    if isinstance(final_output, dict) and "expense" in final_output:
-      # Session-level guard: only save once per ADK session to prevent
-      # duplicate inserts caused by Streamlit reruns re-executing this block.
-      already_saved = session_to_track in st.session_state.get("saved_session_ids", set())
-      if not already_saved:
-        if submitter_email:
-          final_output["expense"]["submitter"] = submitter_email
-        elif not final_output["expense"].get("submitter") or final_output["expense"]["submitter"] == "employee@acmecorp.com":
-          final_output["expense"]["submitter"] = st.session_state.email
-          
-        if (
-          st.session_state.role == "Employee"
-          and not st.session_state.get("from_review_submit", False)
-          and not final_output["expense"].get("is_manual_submit")
-        ):
-          st.session_state.review_expense_data = final_output["expense"]
-          st.session_state.review_session_to_track = session_to_track
-        else:
-          decision = final_output.get("decision") or "Approved"
-          save_expense(final_output["expense"], decision)
-          if session_to_track:
-            st.session_state.saved_session_ids.add(session_to_track)
-          if final_output["expense"].get("is_manual_submit"):
-            st.session_state.manual_submit_success = True
-
-
-def parse_interrupt_details(msg: str) -> dict:
-  """Best-effort extraction of structured data from the interrupt message."""
-  details = {}
-  for line in msg.splitlines():
-    line = line.strip()
-    if line.startswith("Expense of $"):
-      try:
-        rest = line[len("Expense of $"):]
-        amt_str, rest2 = rest.split(" by ", 1)
-        details["amount"] = amt_str.strip()
-        sub_str, rest3 = rest2.split(" for '", 1)
-        details["submitter"] = sub_str.strip()
-        desc_str = rest3.rsplit("' requires review", 1)[0]
-        details["description"] = desc_str.strip()
-      except Exception:
-        pass
-    if "Risk Assessment:" in line:
-      details["risk"] = line.split("Risk Assessment:", 1)[1].strip()
-    if "SECURITY EVENT FLAGGED" in line:
-      details["security_flag"] = True
-    if "Prompt Injection Detected" in line:
-      details["injection"] = True
-    if "Redacted PII Categories:" in line:
-      details["pii"] = line.split("Redacted PII Categories:", 1)[1].strip()
-  return details
 
 
 # ╔═══════════════════════════════════════════════════════════╗
