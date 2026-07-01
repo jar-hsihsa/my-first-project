@@ -106,6 +106,16 @@ def init_db():
                 password_hash TEXT
             )
         """)
+        # Bug #17: Opaque session token store — avoids exposing credential-derived hashes in URL
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ui_sessions (
+                session_token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME NOT NULL
+            )
+        """)
         conn.commit()
 
         # Check if users table is empty and seed if necessary
@@ -119,6 +129,7 @@ def init_db():
                 ("employee3@acmecorp.com", "Employee 3", "Employee", hash_password("emp3pass")),
                 ("employee4@acmecorp.com", "Employee 4", "Employee", hash_password("emp4pass")),
                 ("employee5@acmecorp.com", "Employee 5", "Employee", hash_password("emp5pass")),
+                ("employee6@acmecorp.com", "Employee 6", "Employee", hash_password("emp6pass")),  # Bug #19: Employee 6 was missing
                 ("employee7@acmecorp.com", "Employee 7", "Employee", hash_password("emp7pass")),
                 ("admin@acmecorp.com", "Acme Admin", "Admin", hash_password("adminpass")),
             ]
@@ -166,21 +177,26 @@ class ExpenseReport(BaseModel):
     original_currency: str | None = None
     exchange_rate: float | None = None
 
+def _blocking_fetch_rate(currency: str) -> float:
+    """Blocking HTTP fetch for exchange rate. Run via run_in_executor to avoid blocking event loop (Bug #15)."""
+    import urllib.request
+    url = f"https://open.er-api.com/v6/latest/{currency}"
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=5) as response:
+        data = json.loads(response.read().decode('utf-8'))
+        return data['rates']['USD']
+
+
 def convert_to_usd(amount: float, currency: str, date: str) -> tuple[float, float, str]:
-    """Convert amount to USD using Frankfurter API. Returns (usd_amount, exchange_rate, error_note)."""
+    """Convert amount to USD using exchange rate API. Returns (usd_amount, exchange_rate, error_note)."""
     currency = currency.upper().strip()
     if currency == "USD":
         return amount, 1.0, ""
     try:
         import urllib.request
-        import json
-        url = f"https://open.er-api.com/v6/latest/{currency}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            rate = data['rates']['USD']
-            converted = round(amount * rate, 2)
-            return converted, rate, ""
+        rate = _blocking_fetch_rate(currency)
+        converted = round(amount * rate, 2)
+        return converted, rate, ""
     except Exception as e:
         return amount, 1.0, f"Conversion failed: Currency {currency} not supported by exchange rate API. Amount defaulted to 1:1."
 
@@ -315,6 +331,9 @@ def parse_expense_node(ctx: Context, node_input: Any):
                 usd_amount, rate, err_note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
                 expense_dict["exchange_rate"] = rate
                 expense_dict["amount"] = usd_amount
+                # Bug #2: Surface conversion failure so admin/employee can see it
+                if err_note:
+                    expense_dict["description"] = f"[Warning: {err_note}] {expense_dict.get('description', '')}"
 
         # Increment run count for sequential testing in the same session
         run_count = ctx.state.get("run_count", 0) + 1
@@ -474,6 +493,16 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
     expense = node_input["expense"]
     desc = expense.get("description", "")
     
+    # Bug #5: Check for duplicates BEFORE scrubbing so the canonical description is used.
+    # If scrubbing happens first, two identical expenses (one with PII, one without) get
+    # different descriptions after scrubbing and the duplicate is not detected.
+    is_dup = check_duplicate(
+        expense.get("amount", 0.0),
+        expense.get("date", ""),
+        expense.get("submitter", ""),
+        expense.get("description", ""),
+    )
+
     # 1. Scrub personal data
     clean_desc, redacted = scrub_personal_data(desc)
     expense["description"] = clean_desc
@@ -502,7 +531,9 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
             expected_amt = round(ocr_amount * float(expense["exchange_rate"]), 2)
             
         submitted_amt = float(expense["amount"])
-        if submitted_amt != expected_amt:
+        # Bug #7: Use tolerance for float comparison to avoid false tamper alerts
+        # from floating-point rounding during currency conversion
+        if abs(submitted_amt - expected_amt) > 0.01:
             tamper_alerts.append(f"Amount changed from {expected_amt} to {submitted_amt}.")
             
         if submitted_curr != ocr_curr:
@@ -539,15 +570,11 @@ def security_checkpoint_node(ctx: Context, node_input: dict) -> Event:
             redacted.append("Tamper Detected")
             expense["description"] = f"🚨 {tamper_msg}\n\nOriginal Description: {expense.get('description', '')}"
 
-    # 4. Check for duplicates
-    is_dup = check_duplicate(
-        expense.get("amount", 0.0),
-        expense.get("date", ""),
-        expense.get("submitter", ""),
-        expense.get("description", ""),
-    )
+    # 4. Check for duplicates (moved before scrub — see Bug #5 fix above)
     if is_dup:
         redacted.append("Duplicate Expense")
+        # Also mark the description so admin can immediately see it's a duplicate
+        expense["description"] = f"⚠️ DUPLICATE SUBMISSION: {expense.get('description', '')}"
 
     # Update output with the final (possibly extended) violations list
     output_data = {
@@ -694,7 +721,10 @@ async def employee_review_gate(ctx: Context, node_input: dict):
     """Pauses the workflow to let the employee review the OCR extraction before submission."""
     expense = node_input["expense"]
     
-    # Bypass the pause if this is a manual submission or has already been reviewed
+    # Bypass the pause if this is a manual submission or has already been reviewed.
+    # NOTE (Bug #8): ocr_amount presence means the employee has already reviewed the
+    # OCR extraction once. The security_checkpoint_node later validates all submitted
+    # fields against the original OCR values to detect any tampering.
     if expense.get("is_manual_submit") or expense.get("ocr_amount") is not None:
         yield Event(output=node_input)
     else:
@@ -752,7 +782,10 @@ def outcome_node(ctx: Context, node_input: Any):
         expense = ctx.state.get("expense", {})
         risk = ctx.state.get("risk_assessment", "N/A")
         decision_text = str(node_input)
-        decision = "Approved" if "approve" in decision_text.lower() else "Rejected"
+        # Bug #6: Expand affirmative keywords so common natural-language approvals
+        # ("Yes", "OK", "looks good") are not silently classified as Rejected.
+        _affirmatives = ("approve", "approved", "yes", "ok", "looks good", "fine", "accept", "accepted")
+        decision = "Approved" if any(word in decision_text.lower() for word in _affirmatives) else "Rejected"
         reason = f"Decision made by human reviewer: {decision_text}"
     
     is_security_event = ctx.state.get("is_security_event", False)
@@ -827,8 +860,9 @@ def notification_node(ctx: Context, node_input: dict) -> Event:
     """Mock node that formats and logs an email notification summarizing the outcome."""
     expense = node_input["expense"]
     decision = node_input["decision"]
-    reason = node_input["reason"]
-    risk = node_input["risk_assessment"]
+    # Bug #1: Use .get() to avoid KeyError on unexpected code paths
+    reason = node_input.get("reason", "N/A")
+    risk = node_input.get("risk_assessment", "N/A")
     submitter = expense.get("submitter", "employee@acmecorp.com")
     
     email_subject = f"Notification: Your Expense Report has been {decision}"

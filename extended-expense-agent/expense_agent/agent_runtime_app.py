@@ -18,14 +18,20 @@ load_dotenv()
 import logging
 import os
 from typing import Any
-from unittest.mock import MagicMock
 
 import google.auth
 import google.auth.exceptions
 
 # Handle environment without GCP default credentials gracefully for local dev / AI Studio
 if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() == "false":
-    google.auth.default = MagicMock(return_value=(MagicMock(), "dummy-gcp-project"))
+    # Bug #16: Use a lightweight stub instead of unittest.mock.MagicMock in production code.
+    class _FakeCredentials:
+        """Minimal credentials stub for local / AI Studio use."""
+        token = None
+        expiry = None
+        def refresh(self, request): pass
+        def before_request(self, request, method, url, headers): pass
+    google.auth.default = lambda *a, **kw: (_FakeCredentials(), "dummy-gcp-project")
     os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project")
     try:
         from google.cloud.aiplatform.utils import resource_manager_utils
@@ -36,7 +42,7 @@ else:
     try:
         google.auth.default()
     except google.auth.exceptions.DefaultCredentialsError:
-        google.auth.default = MagicMock(return_value=(MagicMock(), "dummy-gcp-project"))
+        google.auth.default = lambda *a, **kw: (_FakeCredentials(), "dummy-gcp-project")
         os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "dummy-gcp-project")
 
 import vertexai
