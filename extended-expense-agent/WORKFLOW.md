@@ -61,7 +61,9 @@ flowchart TD
         P6[Format Commit Message]:::skill
         F4[[global skills/git-commit-formatter]]:::file -.-> |Read Skill| P6
         P6 --> H5{Approval: Git Commit}:::human
-        H5 --> P6_issue[Label Issue Fixed]:::skill
+        H5 --> P6_push_ask{Approval: Git Push}:::human
+        P6_push_ask --> P6_push[Push to Remote]:::rule
+        P6_push --> P6_issue[Label Issue Fixed]:::skill
         F3 -.-> |Read Skill| P6_issue
         P6_issue --> P6_pr[Raise PR to ashish]:::skill
         P6_pr --> H6{Approval: Raise PR}:::human
@@ -120,6 +122,7 @@ flowchart TD
    * **Action**: Generate a "Conventional Commit" message (e.g., `feat(auth): add login`).
 * 🧠 **File Activated:** `.agents/AGENTS.md` (Git Commits Rule)
    * 🛑 **APPROVAL GATE**: Propose the commit message and wait for **Explicit Approval**.
+   * 🛑 **APPROVAL GATE**: Immediately after a successful commit, proactively ask for **Explicit Approval** to push to the remote repository.
 * 🧠 **File Activated:** `~/.gemini/config/skills/issue-resolution-workflow/SKILL.md`
    * **Action**: Update the GitHub issue to have only the 'Fixed' label.
    * 🛑 **APPROVAL GATE**: Ask for permission to raise a Pull Request targeting the `ashish` branch.

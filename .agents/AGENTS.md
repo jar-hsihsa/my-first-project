@@ -74,4 +74,4 @@ Implement agent logic in `expense_agent/` and `frontend/`. Use `agents-cli playg
 - **ADK tool imports**: Import the tool instance, not the module: `from google.adk.tools.load_web_page import load_web_page`
 - **Run Python with `uv`**: `uv run python script.py`. Run `agents-cli install` first.
 - **Stop on repeated errors**: If the same error appears 3+ times, fix the root cause instead of retrying.
-- **Git Commits & Pushes**: Never execute `git commit` or `git push` without explicitly asking the user for permission first. You must propose the exact commit message to the user and wait for their approval before proceeding.
+- **Git Commits & Pushes**: Never execute `git commit` or `git push` without explicitly asking the user for permission first. You must propose the exact commit message to the user and wait for their approval before proceeding. **Immediately after a successful local commit, you MUST proactively ask the user for permission to push the changes to the remote repository.**
