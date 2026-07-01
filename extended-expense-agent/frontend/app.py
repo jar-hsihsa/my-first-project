@@ -5,6 +5,9 @@ import os
 import sqlite3
 import asyncio
 import threading
+import hashlib  # Bug #10: moved from inside functions to module level
+import logging  # Bug #10 + #18: structured logging instead of print()
+import re       # Bug #10: moved from inside get_category_threshold
 from datetime import date
 from html import escape as html_escape
 
@@ -13,6 +16,15 @@ nest_asyncio.apply()
 
 from expense_agent.agent_runtime_app import agent_runtime
 from expense_agent.agent import init_db
+
+# Bug #3: Load company policies once at module level — avoid 3x file reads per render
+_FRONTEND_POLICIES: dict = {}
+try:
+    _pol_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "company_policies.json")
+    with open(_pol_path) as _f:
+        _FRONTEND_POLICIES = json.load(_f)
+except Exception:
+    pass
 
 if "db_initialized" not in st.session_state:
   init_db()
@@ -990,7 +1002,8 @@ _defaults = {
   "manual_category": None,
   "manual_submitter": "",
   "manual_date": None,
-  "manual_description": ""
+  "manual_description": "",
+  "active_session_token": None,  # Bug #17: tracks opaque UUID session token for logout cleanup
 }
 for k, v in _defaults.items():
   if k not in st.session_state:
@@ -1005,33 +1018,93 @@ def _db_path():
   return os.path.join(os.path.dirname(dir_path), "expenses.db")
 
 
-# Prevent URL privilege escalation bypass by verifying query parameter token if not logged in
+import uuid as _uuid
+
+def create_ui_session(email: str, role: str, hours: int = 8) -> str:
+  """Bug #17: Create an opaque, time-limited session token in the DB.
+  
+  Returns a random UUID string. The URL stores only this token — never the
+  credential-derived hash — so the URL cannot be used to derive passwords.
+  Token expires after `hours` hours (default 8h, a standard work day).
+  """
+  import datetime
+  token = str(_uuid.uuid4())
+  now = datetime.datetime.utcnow()
+  expires = now + datetime.timedelta(hours=hours)
+  try:
+    with sqlite3.connect(_db_path()) as conn:
+      # Clean up expired sessions for this user before inserting
+      conn.execute(
+        "DELETE FROM ui_sessions WHERE email = ? OR expires_at < ?",
+        (email, now.isoformat())
+      )
+      conn.execute(
+        "INSERT INTO ui_sessions (session_token, email, role, expires_at) VALUES (?, ?, ?, ?)",
+        (token, email, role, expires.isoformat())
+      )
+      conn.commit()
+  except Exception as e:
+    logging.error(f"create_ui_session error: {e}")
+  return token
+
+
+def verify_ui_session(token: str) -> tuple[str, str] | None:
+  """Bug #17: Verify an opaque session token. Returns (email, role) or None if invalid/expired."""
+  import datetime
+  try:
+    now = datetime.datetime.utcnow().isoformat()
+    with sqlite3.connect(_db_path()) as conn:
+      cur = conn.cursor()
+      cur.execute(
+        "SELECT email, role FROM ui_sessions WHERE session_token = ? AND expires_at > ?",
+        (token, now)
+      )
+      row = cur.fetchone()
+      if row:
+        return row[0], row[1]  # (email, role)
+  except Exception as e:
+    logging.error(f"verify_ui_session error: {e}")
+  return None
+
+
+def delete_ui_session(token: str) -> None:
+  """Bug #17: Delete a session token on logout."""
+  try:
+    with sqlite3.connect(_db_path()) as conn:
+      conn.execute("DELETE FROM ui_sessions WHERE session_token = ?", (token,))
+      conn.commit()
+  except Exception as e:
+    logging.error(f"delete_ui_session error: {e}")
+
+
+# Bug #17: Opaque session token reload — verifies a short-lived UUID against the DB
+# This replaces the old scheme of email+role+credential-hash in URL params.
+# Security benefit: URL token cannot be used to derive or brute-force passwords.
+# Reload benefit: session persists as long as token hasn't expired (8h default).
 if not st.session_state.logged_in:
-    email = st.query_params.get("email")
-    role = st.query_params.get("role")
-    token = st.query_params.get("token")
-    if email and role and token:
-        import hashlib
-        verified = False
-        try:
-            with sqlite3.connect(_db_path()) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT role, password_hash FROM users WHERE email = ?", (email.strip(),))
-                row = cur.fetchone()
-                if row:
-                    db_role, password_hash = row
-                    expected_token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
-                    if token == expected_token and db_role == role and db_role in _VALID_ROLES:
-                        st.session_state.logged_in = True
-                        st.session_state.email = email
-                        st.session_state.role = role
-                        verified = True
-        except Exception:
-            pass
-        if not verified:
+    session_token = st.query_params.get("session")
+    if session_token:
+        result = verify_ui_session(session_token)
+        if result:
+            s_email, s_role = result
+            if s_role in _VALID_ROLES:
+                st.session_state.logged_in = True
+                st.session_state.email = s_email
+                st.session_state.role = s_role
+                st.session_state.active_session_token = session_token
+            else:
+                # Invalid role — clear stale token
+                delete_ui_session(session_token)
+                st.query_params.clear()
+                st.info("⚠️ Session expired or invalid. Please sign in again.")
+        else:
+            # Token not found or expired
             st.query_params.clear()
+            # Bug #9: Show clear message so users know why auto-login didn't work
+            st.info("⚠️ Session expired. Please sign in again.")
     else:
-        if "email" in st.query_params or "role" in st.query_params or "token" in st.query_params:
+        # Legacy cleanup: remove old-style email/role/token params if present
+        if any(k in st.query_params for k in ("email", "role", "token")):
             st.query_params.clear()
 
 if st.session_state.session_id is None:
@@ -1042,9 +1115,8 @@ if st.session_state.session_id is None:
 
 def verify_credentials(email: str, password: str) -> bool:
   """Verify user credentials against SQLite database."""
-  import hashlib
   try:
-    hashed_pwd = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    hashed_pwd = hashlib.sha256(password.encode("utf-8")).hexdigest()  # Bug #10: hashlib now at module level
     with sqlite3.connect(_db_path()) as conn:
       cur = conn.cursor()
       cur.execute(
@@ -1053,7 +1125,9 @@ def verify_credentials(email: str, password: str) -> bool:
       )
       row = cur.fetchone()
       return row is not None
-  except Exception:
+  except Exception as e:
+    # Bug #4: Log the real error so DB/infra issues are not silently swallowed
+    logging.exception(f"verify_credentials error for {email}: {e}")
     return False
 
 
@@ -1107,7 +1181,8 @@ def save_expense(expense: dict, status: str):
       )
       conn.commit()
   except Exception as e:
-    print(f"Error saving expense: {e}")
+    # Bug #18: use structured logging instead of print() so errors appear in server logs
+    logging.error(f"Error saving expense: {e}")
 
 
 def save_pending_approval(session_id: str, interrupt_id: str, message: str, submitter_email: str, receipt_bytes: str = "", raw_json: str = ""):
@@ -1120,7 +1195,21 @@ def save_pending_approval(session_id: str, interrupt_id: str, message: str, subm
       )
       conn.commit()
   except Exception as e:
-    print(f"Error saving pending approval: {e}")
+    # Bug #18: use structured logging instead of print()
+    logging.error(f"Error saving pending approval: {e}")
+
+
+def get_pending_count() -> int:
+  """Return count of pending approvals using COUNT(*) — avoids full table scan (Bug #14)."""
+  try:
+    with sqlite3.connect(_db_path()) as conn:
+      cur = conn.cursor()
+      cur.execute("SELECT COUNT(*) FROM pending_approvals")
+      return cur.fetchone()[0]
+  except Exception:
+    return 0
+
+
 
 def get_all_pending_approvals() -> list[dict]:
   """Return all pending approvals ordered by id. Uses context manager (Bug #4)."""
@@ -1169,15 +1258,9 @@ def _esc_description(value: str) -> str:
 
 def get_category_threshold(email: str, category: str) -> float:
   """Get the approval threshold for a category and email domain."""
-  import os, json
-  policies_path = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "company_policies.json"
-  )
-  try:
-    with open(policies_path, "r") as f:
-      policies = json.load(f)
-  except Exception:
-    policies = {}
+  # Bug #3: Use module-level cached policies instead of re-reading file per call
+  # Bug #10: os and json are now at module level, removed inner import
+  policies = _FRONTEND_POLICIES
 
   domain = "default"
   if email and "@" in email:
@@ -1436,7 +1519,7 @@ if not st.session_state.logged_in:
             st.rerun()
       
       elif st.session_state.selected_login_role == "Employee":
-        employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 7]]
+        employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 6, 7]]  # Bug #19: Added Employee 6
         selected_employee = st.selectbox("Select Employee", options=employee_names)
         password = st.text_input("Password", type="password", value="")
         
@@ -1461,23 +1544,13 @@ if not st.session_state.logged_in:
             st.session_state.logged_in = True
             st.session_state.email = email
             st.session_state.role = "Employee"
-            st.query_params["email"] = st.session_state.email
-            st.query_params["role"] = st.session_state.role
-            
-            # Calculate secure token to survive refreshes
-            import hashlib
-            try:
-              with sqlite3.connect(_db_path()) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT password_hash FROM users WHERE email = ?", (email.strip(),))
-                row = cur.fetchone()
-                if row:
-                  password_hash = row[0]
-                  token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
-                  st.query_params["token"] = token
-            except Exception:
-              pass
-              
+
+            # Bug #17: Create opaque session token (UUID, 8h expiry) stored in DB
+            # URL shows only ?session=<uuid>, never credentials or their hash
+            session_tok = create_ui_session(email, "Employee")
+            st.session_state.active_session_token = session_tok
+            st.query_params["session"] = session_tok
+
             st.session_state.emp_prev_state = (None, "")
             st.rerun()
           else:
@@ -1507,23 +1580,12 @@ if not st.session_state.logged_in:
               st.session_state.logged_in = True
               st.session_state.email = email
               st.session_state.role = "Admin"
-              st.query_params["email"] = email
-              st.query_params["role"] = "Admin"
-              
-              # Calculate secure token to survive refreshes
-              import hashlib
-              try:
-                with sqlite3.connect(_db_path()) as conn:
-                  cur = conn.cursor()
-                  cur.execute("SELECT password_hash FROM users WHERE email = ?", (email.strip(),))
-                  row = cur.fetchone()
-                  if row:
-                    password_hash = row[0]
-                    token = hashlib.sha256((email + ":" + password_hash).encode("utf-8")).hexdigest()
-                    st.query_params["token"] = token
-              except Exception:
-                pass
-                
+
+              # Bug #17: Create opaque session token (UUID, 8h expiry) stored in DB
+              session_tok = create_ui_session(email, "Admin")
+              st.session_state.active_session_token = session_tok
+              st.query_params["session"] = session_tok
+
               st.session_state.admin_prev_state = (None, "")
               st.rerun()
             else:
@@ -1551,8 +1613,8 @@ with st.sidebar:
 
   # Navigation
   if st.session_state.role == "Admin":
-    # Bug #10: show real count from DB, not a hardcoded max-1 boolean flag
-    pending_count = len(get_all_pending_approvals())
+    # Bug #14: Use COUNT(*) query instead of fetching all rows just for the count
+    pending_count = get_pending_count()
     badge = f'<span class="nav-badge">{pending_count}</span>' if pending_count else ""
     st.markdown(
       f'<div class="nav-active">Pending Approvals {badge}</div>',
@@ -1596,9 +1658,13 @@ with st.sidebar:
     )
 
   if st.button(" Logout", use_container_width=True):
+    # Bug #17: Invalidate the opaque session token so it can't be reused
+    if st.session_state.active_session_token:
+      delete_ui_session(st.session_state.active_session_token)
     st.session_state.logged_in = False
     st.session_state.email = ""
     st.session_state.role = ""
+    st.session_state.active_session_token = None
     st.query_params.clear()
     st.rerun()
 

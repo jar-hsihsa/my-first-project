@@ -13,4 +13,4 @@
 # limitations under the License.
 
 EXPENSE_THRESHOLD = 100.0
-MODEL_NAME = "gemini-3.1-flash-lite"
+MODEL_NAME = "gemini-2.5-flash"  # Bug #11: Fixed from invalid "gemini-3.1-flash-lite"
