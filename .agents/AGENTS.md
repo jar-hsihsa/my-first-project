@@ -32,6 +32,10 @@ For EVERY single change, you must pause your planning loops and output this prec
 - **Why It Matters**: The direct impact of this change on the user or the business goals.
 - **Side Effects**: Any ripple effects this might cause in other parts of the business process.
 
+### 💡 Agent Recommendation
+- **Assessment**: An objective recommendation based on best practices and the impact analysis.
+- **Verdict**: [Recommend Proceeding] OR [Recommend Reconsidering] and a brief explanation why.
+
 ### 🛑 Request for Approval
 *"Please review this operational change on the task branch. Reply with my consent to proceed, or let me know what to adjust."*
 
