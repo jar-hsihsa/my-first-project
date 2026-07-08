@@ -2190,13 +2190,10 @@ elif st.session_state.role == "Admin":
   
     else:
       # ── No pending — show last result + all expenses ─────
-      st.markdown("""
-        <div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-bottom: 2rem;">
-            
-            <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Zero!</h3>
-            <p>All expense requests have been processed.</p>
-        </div>
-      """, unsafe_allow_html=True)
+      st.markdown("""<div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-bottom: 2rem;">
+    <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Zero!</h3>
+    <p>All expense requests have been processed.</p>
+</div>""", unsafe_allow_html=True)
 
       if st.session_state.final_output:
         out = st.session_state.final_output
