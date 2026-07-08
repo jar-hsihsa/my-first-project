@@ -1265,7 +1265,9 @@ with st.sidebar:
     # Bug #14: Use COUNT(*) query instead of fetching all rows just for the count
     pending_count = get_pending_count()
     btn_label = f"Pending Approvals ({pending_count})" if pending_count else "Pending Approvals"
-    st.button(btn_label, use_container_width=True, type="primary")
+    if st.button(btn_label, use_container_width=True, type="primary"):
+        st.session_state.admin_scroll = "pending_approvals"
+        st.rerun()
   else:
     if st.button("Submit Expense", use_container_width=True, type="primary" if st.session_state.active_page == "Submit Expense" else "secondary"):
         st.session_state.active_page = "Submit Expense"
@@ -1980,9 +1982,17 @@ elif st.session_state.role == "Admin":
         st.markdown("---")
   
     st.markdown(
-      f'<div class="section-title">{total_label}</div>',
+      f'<div class="section-title" id="pending_approvals">{total_label}</div>',
       unsafe_allow_html=True,
     )
+    
+    if st.session_state.get("admin_scroll") == "pending_approvals":
+        import streamlit.components.v1 as components
+        components.html(
+            "<script>window.parent.document.getElementById('pending_approvals').scrollIntoView({behavior: 'smooth'});</script>",
+            height=0
+        )
+        st.session_state.admin_scroll = None
   
     @st.dialog("Receipt Preview")
     def show_receipt_dialog(img_data):
