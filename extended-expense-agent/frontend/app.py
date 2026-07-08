@@ -1192,24 +1192,22 @@ if not st.session_state.logged_in:
       
       elif st.session_state.selected_login_role == "Employee":
         employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 6, 7]]  # Bug #19: Added Employee 6
-        selected_employee = st.selectbox("Select Employee", options=employee_names)
-        password = st.text_input("Password", type="password", value="")
-        
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
+        with st.form("employee_login_form"):
+            selected_employee = st.selectbox("Select Employee", options=employee_names)
+            password = st.text_input("Password", type="password", value="")
+            
+            col_b1, col_b2 = st.columns([1, 2])
+            with col_b1:
+              back_clicked = st.form_submit_button(" Back", use_container_width=True)
+            with col_b2:
+              signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+              
+        if back_clicked:
             st.session_state.selected_login_role = None
             st.session_state.emp_prev_state = (None, "")
             st.rerun()
-        with col_b2:
-          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
-          
-        current_state = (selected_employee, password)
-        previous_state = st.session_state.get("emp_prev_state", (None, ""))
-        enter_pressed = (password != "") and (current_state != previous_state)
-        
-        if signin_clicked or enter_pressed:
-          st.session_state.emp_prev_state = current_state
+            
+        if signin_clicked:
           emp_num = selected_employee.split(" ")[1]
           email = f"employee{emp_num}@acmecorp.com"
           if verify_credentials(email, password):
@@ -1229,24 +1227,22 @@ if not st.session_state.logged_in:
             st.error("Invalid password. Please try again.")
             
       elif st.session_state.selected_login_role == "Admin":
-        email = st.text_input("Corporate Email", value="admin@acmecorp.com")
-        password = st.text_input("Password", type="password", value="")
+        with st.form("admin_login_form"):
+            email = st.text_input("Corporate Email", value="admin@acmecorp.com")
+            password = st.text_input("Password", type="password", value="")
 
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
+            col_b1, col_b2 = st.columns([1, 2])
+            with col_b1:
+              back_clicked = st.form_submit_button(" Back", use_container_width=True)
+            with col_b2:
+              signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+
+        if back_clicked:
             st.session_state.selected_login_role = None
             st.session_state.admin_prev_state = (None, "")
             st.rerun()
-        with col_b2:
-          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
 
-        current_state = (email, password)
-        previous_state = st.session_state.get("admin_prev_state", (None, ""))
-        enter_pressed = (password != "") and (current_state != previous_state)
-
-        if signin_clicked or enter_pressed:
-          st.session_state.admin_prev_state = current_state
+        if signin_clicked:
           if email.strip():
             if verify_credentials(email, password):
               st.session_state.logged_in = True
@@ -1374,6 +1370,32 @@ if st.session_state.role == "Employee":
       '<div class="section-title">Submit New Expense</div>',
       unsafe_allow_html=True,
     )
+    
+    if not st.session_state.final_output and not st.session_state.from_review_submit:
+        step = 1
+    elif st.session_state.final_output and not st.session_state.from_review_submit:
+        out = st.session_state.final_output
+        decision = out.get("decision", "") if isinstance(out, dict) else ""
+        if decision in ["Approved", "Auto-Approved", "Rejected"]:
+            step = 3
+        else:
+            step = 2
+    else:
+        step = 3
+        
+    step1_style = "font-weight: bold; color: #2563eb;" if step == 1 else "color: #9ca3af;"
+    step2_style = "font-weight: bold; color: #2563eb;" if step == 2 else "color: #9ca3af;"
+    step3_style = "font-weight: bold; color: #2563eb;" if step == 3 else "color: #9ca3af;"
+    
+    st.markdown(f"""
+        <div style="display: flex; justify-content: center; align-items: center; gap: 1rem; margin-bottom: 2rem; font-size: 0.95rem;">
+            <span style="{step1_style}">1. Upload Receipt</span>
+            <span style="color: #d1d5db;">➔</span>
+            <span style="{step2_style}">2. Review Data</span>
+            <span style="color: #d1d5db;">➔</span>
+            <span style="{step3_style}">3. Confirmation</span>
+        </div>
+    """, unsafe_allow_html=True)
   
     tab_receipt, tab_form = st.tabs(["Upload Receipt", "Fill Expense Form"])
   
@@ -1955,6 +1977,14 @@ if st.session_state.role == "Employee":
         )
       else:
         st.info("No expenses match the selected filters.")
+    else:
+      st.markdown("""
+        <div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📭</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">No Past Expenses!</h3>
+            <p>You haven't submitted any expenses yet. Go to the Submit Expense tab to get started.</p>
+        </div>
+      """, unsafe_allow_html=True)
 
   if st.session_state.active_page == "My History":
     render_employee_expenses()
@@ -1971,6 +2001,27 @@ elif st.session_state.role == "Admin":
     pending_records = get_all_pending_approvals()
     pending_count = len(pending_records)
     total_label = f"Pending Approval Requests ({pending_count})" if pending_count else "All Expenses"
+
+    if all_expenses:
+        import pandas as pd
+        df = pd.DataFrame(all_expenses)
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+        
+        approved_amt = df[df['status'] == 'Approved']['amount'].sum()
+        rejected_amt = df[df['status'] == 'Rejected']['amount'].sum()
+        
+        st.markdown('<div class="section-title">Dashboard Overview</div>', unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Approved", f"${approved_amt:,.2f}")
+        col2.metric("Total Rejected", f"${rejected_amt:,.2f}")
+        col3.metric("Pending Requests", pending_count)
+        
+        cat_df = df.groupby('category')['amount'].sum().reset_index()
+        if not cat_df.empty:
+            st.markdown("#### Expenses by Category")
+            st.bar_chart(cat_df, x="category", y="amount", use_container_width=True)
+            
+        st.markdown("---")
   
     st.markdown(
       f'<div class="section-title">{total_label}</div>',
@@ -2184,6 +2235,14 @@ elif st.session_state.role == "Admin":
   
     else:
       # ── No pending — show last result + all expenses ─────
+      st.markdown("""
+        <div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-bottom: 2rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">🎉</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Zero!</h3>
+            <p>All expense requests have been processed.</p>
+        </div>
+      """, unsafe_allow_html=True)
+
       if st.session_state.final_output:
         out = st.session_state.final_output
         if isinstance(out, dict):
