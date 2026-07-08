@@ -1476,13 +1476,13 @@ if st.session_state.role == "Employee":
 
         is_success = st.session_state.get("review_submitted_success", False)
         with st.form("review_form"):
-          rev_amount = st.number_input("Amount", value=float(usd_amount), disabled=is_success)
+          rev_amount = st.number_input("Amount (USD)", value=float(usd_amount), disabled=is_success)
           
           if orig_currency.upper() != "USD" and "exchange_rate" in exp_data:
             st.caption(f"*(Converted to USD using live rate: 1 {orig_currency.upper()} = ${exp_data.get('exchange_rate')} USD)*")
 
           all_currencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AWG", "AZN", "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CDF", "CLP", "COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "FJD", "FKP", "FOK", "GEL", "GGP", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS", "IMP", "IQD", "IRR", "ISK", "JEP", "JMD", "JOD", "KES", "KGS", "KHR", "KID", "KMF", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SLL", "SOS", "SRD", "SSP", "STN", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TVD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD", "XDR", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"]
-          curr_val = orig_currency.upper()
+          curr_val = "USD"
           curr_idx = all_currencies.index(curr_val) if curr_val in all_currencies else 0
           rev_currency = st.selectbox("Currency", options=all_currencies, index=curr_idx, disabled=is_success)
           
