@@ -1192,11 +1192,6 @@ if not st.session_state.logged_in:
       
       elif st.session_state.selected_login_role == "Employee":
         employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 6, 7]]  # Bug #19: Added Employee 6
-        
-        if st.button("⬅️ Back", key="emp_back"):
-            st.session_state.selected_login_role = None
-            st.session_state.emp_prev_state = (None, "")
-            st.rerun()
             
         with st.form("employee_login_form"):
             selected_employee = st.selectbox("Select Employee", options=employee_names)
@@ -1223,11 +1218,6 @@ if not st.session_state.logged_in:
             st.error("Invalid password. Please try again.")
             
       elif st.session_state.selected_login_role == "Admin":
-        if st.button("⬅️ Back", key="adm_back"):
-            st.session_state.selected_login_role = None
-            st.session_state.admin_prev_state = (None, "")
-            st.rerun()
-            
         with st.form("admin_login_form"):
             email = st.text_input("Corporate Email", value="admin@acmecorp.com")
             password = st.text_input("Password", type="password", value="")
