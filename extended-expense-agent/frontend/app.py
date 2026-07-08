@@ -1054,12 +1054,12 @@ if not st.session_state.logged_in:
                 # Invalid role — clear stale token
                 delete_ui_session(session_token)
                 st.query_params.clear()
-                st.info("⚠️ Session expired or invalid. Please sign in again.")
+                st.info("Warning: Session expired or invalid. Please sign in again.")
         else:
             # Token not found or expired
             st.query_params.clear()
             # Bug #9: Show clear message so users know why auto-login didn't work
-            st.info("⚠️ Session expired. Please sign in again.")
+            st.info("Warning: Session expired. Please sign in again.")
     else:
         # Legacy cleanup: remove old-style email/role/token params if present
         if any(k in st.query_params for k in ("email", "role", "token")):
@@ -1264,13 +1264,13 @@ with st.sidebar:
   if st.session_state.role == "Admin":
     # Bug #14: Use COUNT(*) query instead of fetching all rows just for the count
     pending_count = get_pending_count()
-    btn_label = f"📁 Pending Approvals ({pending_count})" if pending_count else "📁 Pending Approvals"
+    btn_label = f"Pending Approvals ({pending_count})" if pending_count else "Pending Approvals"
     st.button(btn_label, use_container_width=True, type="primary")
   else:
-    if st.button("📝 Submit Expense", use_container_width=True, type="primary" if st.session_state.active_page == "Submit Expense" else "secondary"):
+    if st.button("Submit Expense", use_container_width=True, type="primary" if st.session_state.active_page == "Submit Expense" else "secondary"):
         st.session_state.active_page = "Submit Expense"
         st.rerun()
-    if st.button("🕒 My History", use_container_width=True, type="primary" if st.session_state.active_page == "My History" else "secondary"):
+    if st.button("My History", use_container_width=True, type="primary" if st.session_state.active_page == "My History" else "secondary"):
         st.session_state.active_page = "My History"
         st.rerun()
 
@@ -1352,35 +1352,6 @@ if st.session_state.role == "Employee":
       unsafe_allow_html=True,
     )
     
-    final_out = st.session_state.get("final_output")
-    from_rev = st.session_state.get("from_review_submit", False)
-    
-    if not final_out and not from_rev:
-        step = 1
-    elif final_out and not from_rev:
-        out = final_out
-        decision = out.get("decision", "") if isinstance(out, dict) else ""
-        if decision in ["Approved", "Auto-Approved", "Rejected"]:
-            step = 3
-        else:
-            step = 2
-    else:
-        step = 3
-        
-    step1_style = "font-weight: bold; color: #2563eb;" if step == 1 else "color: #9ca3af;"
-    step2_style = "font-weight: bold; color: #2563eb;" if step == 2 else "color: #9ca3af;"
-    step3_style = "font-weight: bold; color: #2563eb;" if step == 3 else "color: #9ca3af;"
-    
-    st.markdown(f"""
-        <div style="display: flex; justify-content: center; align-items: center; gap: 1rem; margin-bottom: 2rem; font-size: 0.95rem;">
-            <span style="{step1_style}">1. Upload Receipt</span>
-            <span style="color: #d1d5db;">➔</span>
-            <span style="{step2_style}">2. Review Data</span>
-            <span style="color: #d1d5db;">➔</span>
-            <span style="{step3_style}">3. Confirmation</span>
-        </div>
-    """, unsafe_allow_html=True)
-  
     tab_receipt, tab_form = st.tabs(["Upload Receipt", "Fill Expense Form"])
   
     with tab_receipt:
@@ -1578,7 +1549,7 @@ if st.session_state.role == "Employee":
               st.rerun()
               
           if is_success:
-              st.toast("Expense processed successfully and routed to Admin if required!", icon="✅")
+              st.toast("Expense processed successfully and routed to Admin if required!")
               if st.button("Submit Another Receipt", type="primary"):
                   st.session_state.review_expense_data = None
                   st.session_state.review_session_to_track = None
@@ -1653,7 +1624,7 @@ if st.session_state.role == "Employee":
         st.session_state.manual_date = date.today()
   
       if st.session_state.get("manual_submit_success"):
-        st.toast("Expense processed successfully and routed to Admin if required!", icon="✅")
+        st.toast("Expense processed successfully and routed to Admin if required!")
         
       with st.form("expense_form", clear_on_submit=False):
         col_cur, col_a, col_conv, col_b = st.columns([1, 1, 1, 1.2])
@@ -2022,7 +1993,7 @@ elif st.session_state.role == "Admin":
         rejection_reason = st.text_input("Rejection Reason (required):", key=f"rej_reason_{item_db_id}")
         if st.button("Confirm Reject", type="primary"):
             if not rejection_reason.strip():
-                st.toast("A rejection reason is mandatory.", icon="⚠️")
+                st.toast("A rejection reason is mandatory.")
             else:
                 with st.spinner("Rejecting..."):
                     payload = {
@@ -2039,11 +2010,11 @@ elif st.session_state.role == "Admin":
                       events = run_agent(payload, specific_session_id=item_session_id)
                       process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
                       delete_pending_approval(item_db_id)
-                      st.toast("Expense Rejected!", icon="❌")
+                      st.toast("Expense Rejected!")
                       st.rerun()
                     except Exception as e:
                       if "Session not found" in str(e):
-                        st.toast("Session expired. Manually saving rejection.", icon="ℹ️")
+                        st.toast("Session expired. Manually saving rejection.")
                         fallback_exp = {
                           "amount": float(item_details.get("amount", 0.0)),
                           "submitter": item_submitter_str,
@@ -2076,11 +2047,11 @@ elif st.session_state.role == "Admin":
                   events = run_agent(payload, specific_session_id=item_session_id)
                   process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
                   delete_pending_approval(item_db_id)
-                  st.toast("Expense Approved!", icon="✅")
+                  st.toast("Expense Approved!")
                   st.rerun()
                 except Exception as e:
                   if "Session not found" in str(e):
-                    st.toast("Session expired. Manually saving approval.", icon="ℹ️")
+                    st.toast("Session expired. Manually saving approval.")
                     fallback_exp = {
                       "amount": float(item_details.get("amount", 0.0)),
                       "submitter": item_submitter_str,
@@ -2160,7 +2131,7 @@ elif st.session_state.role == "Admin":
         # Security badges HTML
         flags_html = ""
         if has_security:
-          flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">⚠️ Security Event</span>'
+          flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">Warning: Security Event</span>'
         if has_injection:
           flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">🚨 Prompt Injection</span>'
         if pii_info:
@@ -2199,7 +2170,7 @@ elif st.session_state.role == "Admin":
   
         # ── Receipt image preview ────────────────────────────
         if receipt_bytes:
-          if st.button("👁️ View Full Receipt", key=f"btn_view_{db_id}"):
+          if st.button("View Full Receipt", key=f"btn_view_{db_id}"):
             try:
               img_bytes = base64.b64decode(receipt_bytes)
               show_receipt_dialog(img_bytes)
@@ -2211,17 +2182,17 @@ elif st.session_state.role == "Admin":
         
         col1, col2 = st.columns(2)
         with col1:
-          if st.button("❌ Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
+          if st.button("Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
             reject_dialog(db_id, interrupt_id, session_id, submitter_email, details, exp_category, exp_date, submitter_str)
         with col2:
-          if st.button("✅ Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
+          if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
             approve_dialog(db_id, interrupt_id, session_id, submitter_email, details, exp_category, exp_date, submitter_str)
   
     else:
       # ── No pending — show last result + all expenses ─────
       st.markdown("""
         <div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-bottom: 2rem;">
-            <div style="font-size: 3rem; margin-bottom: 1rem;">🎉</div>
+            
             <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Zero!</h3>
             <p>All expense requests have been processed.</p>
         </div>
