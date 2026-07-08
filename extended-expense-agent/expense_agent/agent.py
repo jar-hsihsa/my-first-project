@@ -44,7 +44,7 @@ if use_vertex:
         os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id or "")
     except Exception:
         pass
-    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 
 # Load company policies once at module startup (Bug #6: avoid repeated file I/O per request)
