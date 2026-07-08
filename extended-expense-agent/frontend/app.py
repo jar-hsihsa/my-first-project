@@ -2058,7 +2058,7 @@ elif st.session_state.role == "Admin":
         
         cat_df = df.groupby('category')['amount'].sum().reset_index()
         if not cat_df.empty:
-            st.markdown("#### Expenses by Category")
+            st.markdown('<div style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: #374151;">Expenses by Category</div>', unsafe_allow_html=True)
             st.bar_chart(cat_df, x="category", y="amount", use_container_width=True)
             
         st.markdown("---")
