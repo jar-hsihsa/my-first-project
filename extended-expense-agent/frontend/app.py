@@ -1352,10 +1352,13 @@ if st.session_state.role == "Employee":
       unsafe_allow_html=True,
     )
     
-    if not st.session_state.final_output and not st.session_state.from_review_submit:
+    final_out = st.session_state.get("final_output")
+    from_rev = st.session_state.get("from_review_submit", False)
+    
+    if not final_out and not from_rev:
         step = 1
-    elif st.session_state.final_output and not st.session_state.from_review_submit:
-        out = st.session_state.final_output
+    elif final_out and not from_rev:
+        out = final_out
         decision = out.get("decision", "") if isinstance(out, dict) else ""
         if decision in ["Approved", "Auto-Approved", "Rejected"]:
             step = 3
