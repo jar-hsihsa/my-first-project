@@ -1953,6 +1953,88 @@ if st.session_state.role == "Employee":
 # ╚═══════════════════════════════════════════════════════════╝
 elif st.session_state.role == "Admin":
   @st.fragment(run_every="5s")
+  @st.dialog("Receipt Preview")
+  def show_receipt_dialog(img_data):
+      st.image(img_data, use_container_width=True)
+
+  @st.dialog("Confirm Rejection")
+  def reject_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
+      st.warning("Are you sure you want to reject this expense?")
+      rejection_reason = st.text_input("Rejection Reason (required):", key=f"rej_reason_{item_db_id}")
+      if st.button("Confirm Reject", type="primary", key=f"confirm_reject_btn_{item_db_id}"):
+          if not rejection_reason.strip():
+              st.toast("A rejection reason is mandatory.")
+          else:
+              with st.spinner("Rejecting..."):
+                  payload = {
+                    "role": "tool",
+                    "parts": [{
+                      "function_response": {
+                        "id": item_interrupt_id,
+                        "name": "adk_request_input",
+                        "response": {"output": f"Reject: {rejection_reason}"}
+                      }
+                    }]
+                  }
+                  try:
+                    events = run_agent(payload, specific_session_id=item_session_id)
+                    process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
+                    delete_pending_approval(item_db_id)
+                    st.toast("Expense Rejected!")
+                    st.rerun()
+                  except Exception as e:
+                    if "Session not found" in str(e):
+                      st.toast("Session expired. Manually saving rejection.")
+                      fallback_exp = {
+                        "amount": float(item_details.get("amount", 0.0)),
+                        "submitter": item_submitter_str,
+                        "category": item_category,
+                        "description": item_details.get("description", "—") + f" [Comment: {rejection_reason}]",
+                        "date": item_date
+                      }
+                      save_expense(fallback_exp, "Rejected")
+                      delete_pending_approval(item_db_id)
+                      st.rerun()
+                    else:
+                      st.error(f"Error resuming workflow: {e}")
+
+  @st.dialog("Confirm Approval")
+  def approve_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
+      st.info("Are you sure you want to approve this expense?")
+      if st.button("Confirm Approve", type="primary", key=f"confirm_approve_btn_{item_db_id}"):
+          with st.spinner("Approving..."):
+              payload = {
+                "role": "tool",
+                "parts": [{
+                  "function_response": {
+                    "id": item_interrupt_id,
+                    "name": "adk_request_input",
+                    "response": {"output": "Approve"}
+                  }
+                }]
+              }
+              try:
+                events = run_agent(payload, specific_session_id=item_session_id)
+                process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
+                delete_pending_approval(item_db_id)
+                st.toast("Expense Approved!")
+                st.rerun()
+              except Exception as e:
+                if "Session not found" in str(e):
+                  st.toast("Session expired. Manually saving approval.")
+                  fallback_exp = {
+                    "amount": float(item_details.get("amount", 0.0)),
+                    "submitter": item_submitter_str,
+                    "category": item_category,
+                    "description": item_details.get("description", "—"),
+                    "date": item_date
+                  }
+                  save_expense(fallback_exp, "Approved")
+                  delete_pending_approval(item_db_id)
+                  st.rerun()
+                else:
+                  st.error(f"Error resuming workflow: {e}")
+
   def render_admin_dashboard():
     # ── All Expenses Table ───────────────────────────────────
     all_expenses = get_all_expenses()
@@ -1994,87 +2076,7 @@ elif st.session_state.role == "Admin":
         )
         st.session_state.admin_scroll = None
   
-    @st.dialog("Receipt Preview")
-    def show_receipt_dialog(img_data):
-        st.image(img_data, use_container_width=True)
 
-    @st.dialog("Confirm Rejection")
-    def reject_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
-        st.warning("Are you sure you want to reject this expense?")
-        rejection_reason = st.text_input("Rejection Reason (required):", key=f"rej_reason_{item_db_id}")
-        if st.button("Confirm Reject", type="primary"):
-            if not rejection_reason.strip():
-                st.toast("A rejection reason is mandatory.")
-            else:
-                with st.spinner("Rejecting..."):
-                    payload = {
-                      "role": "tool",
-                      "parts": [{
-                        "function_response": {
-                          "id": item_interrupt_id,
-                          "name": "adk_request_input",
-                          "response": {"output": f"Reject: {rejection_reason}"}
-                        }
-                      }]
-                    }
-                    try:
-                      events = run_agent(payload, specific_session_id=item_session_id)
-                      process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
-                      delete_pending_approval(item_db_id)
-                      st.toast("Expense Rejected!")
-                      st.rerun()
-                    except Exception as e:
-                      if "Session not found" in str(e):
-                        st.toast("Session expired. Manually saving rejection.")
-                        fallback_exp = {
-                          "amount": float(item_details.get("amount", 0.0)),
-                          "submitter": item_submitter_str,
-                          "category": item_category,
-                          "description": item_details.get("description", "—") + f" [Comment: {rejection_reason}]",
-                          "date": item_date
-                        }
-                        save_expense(fallback_exp, "Rejected")
-                        delete_pending_approval(item_db_id)
-                        st.rerun()
-                      else:
-                        st.error(f"Error resuming workflow: {e}")
-
-    @st.dialog("Confirm Approval")
-    def approve_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
-        st.info("Are you sure you want to approve this expense?")
-        if st.button("Confirm Approve", type="primary"):
-            with st.spinner("Approving..."):
-                payload = {
-                  "role": "tool",
-                  "parts": [{
-                    "function_response": {
-                      "id": item_interrupt_id,
-                      "name": "adk_request_input",
-                      "response": {"output": "Approve"}
-                    }
-                  }]
-                }
-                try:
-                  events = run_agent(payload, specific_session_id=item_session_id)
-                  process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
-                  delete_pending_approval(item_db_id)
-                  st.toast("Expense Approved!")
-                  st.rerun()
-                except Exception as e:
-                  if "Session not found" in str(e):
-                    st.toast("Session expired. Manually saving approval.")
-                    fallback_exp = {
-                      "amount": float(item_details.get("amount", 0.0)),
-                      "submitter": item_submitter_str,
-                      "category": item_category,
-                      "description": item_details.get("description", "—"),
-                      "date": item_date
-                    }
-                    save_expense(fallback_exp, "Approved")
-                    delete_pending_approval(item_db_id)
-                    st.rerun()
-                  else:
-                    st.error(f"Error resuming workflow: {e}")
 
     # ── Pending expense detail card ──────────────────────────
     if pending_records:
