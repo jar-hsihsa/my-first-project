@@ -1192,20 +1192,16 @@ if not st.session_state.logged_in:
       
       elif st.session_state.selected_login_role == "Employee":
         employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 6, 7]]  # Bug #19: Added Employee 6
-        with st.form("employee_login_form"):
-            selected_employee = st.selectbox("Select Employee", options=employee_names)
-            password = st.text_input("Password", type="password", value="")
-            
-            col_b1, col_b2 = st.columns([1, 2])
-            with col_b1:
-              back_clicked = st.form_submit_button(" Back", use_container_width=True)
-            with col_b2:
-              signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-              
-        if back_clicked:
+        
+        if st.button("⬅️ Back", key="emp_back"):
             st.session_state.selected_login_role = None
             st.session_state.emp_prev_state = (None, "")
             st.rerun()
+            
+        with st.form("employee_login_form"):
+            selected_employee = st.selectbox("Select Employee", options=employee_names)
+            password = st.text_input("Password", type="password", value="")
+            signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
             
         if signin_clicked:
           emp_num = selected_employee.split(" ")[1]
@@ -1227,20 +1223,15 @@ if not st.session_state.logged_in:
             st.error("Invalid password. Please try again.")
             
       elif st.session_state.selected_login_role == "Admin":
-        with st.form("admin_login_form"):
-            email = st.text_input("Corporate Email", value="admin@acmecorp.com")
-            password = st.text_input("Password", type="password", value="")
-
-            col_b1, col_b2 = st.columns([1, 2])
-            with col_b1:
-              back_clicked = st.form_submit_button(" Back", use_container_width=True)
-            with col_b2:
-              signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
-
-        if back_clicked:
+        if st.button("⬅️ Back", key="adm_back"):
             st.session_state.selected_login_role = None
             st.session_state.admin_prev_state = (None, "")
             st.rerun()
+            
+        with st.form("admin_login_form"):
+            email = st.text_input("Corporate Email", value="admin@acmecorp.com")
+            password = st.text_input("Password", type="password", value="")
+            signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
 
         if signin_clicked:
           if email.strip():
