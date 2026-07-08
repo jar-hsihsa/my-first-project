@@ -209,7 +209,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   margin-bottom: 0.25rem;
   border-bottom: 1px solid #E2E8F0;
 }
-.top-header h1 {
+.top-header .portal-title {
   font-size: 1.4rem;
   font-weight: 700;
   color: #1E293B;
@@ -618,7 +618,7 @@ body[data-theme="dark"] .excel-filter {
   color: #f8fafc !important;
   border-color: #334155 !important;
 }
-body[data-theme="dark"] .top-header h1 {
+body[data-theme="dark"] .top-header .portal-title {
   color: #f8fafc !important;
 }
 body[data-theme="dark"] .top-header-right {
@@ -1331,7 +1331,7 @@ role_label = st.session_state.role
 
 st.markdown(
   f"""<div class="top-header">
-    <h1>Expense Approval Portal</h1>
+    <div class="portal-title">Expense Approval Portal</div>
     <div class="top-header-right">
       <span>Welcome, {_esc(display)} ({_esc(role_label)})</span>
       <span class="user-avatar">{_esc(initials)}</span>
