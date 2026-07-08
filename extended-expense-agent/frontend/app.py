@@ -1549,7 +1549,7 @@ if st.session_state.role == "Employee":
               st.rerun()
               
           if is_success:
-              st.toast("Expense processed successfully and routed to Admin if required!")
+              st.success("Expense processed successfully and routed to Admin if required!")
               if st.button("Submit Another Receipt", type="primary"):
                   st.session_state.review_expense_data = None
                   st.session_state.review_session_to_track = None
@@ -1624,7 +1624,7 @@ if st.session_state.role == "Employee":
         st.session_state.manual_date = date.today()
   
       if st.session_state.get("manual_submit_success"):
-        st.toast("Expense processed successfully and routed to Admin if required!")
+        st.success("Expense processed successfully and routed to Admin if required!")
         
       with st.form("expense_form", clear_on_submit=False):
         col_cur, col_a, col_conv, col_b = st.columns([1, 1, 1, 1.2])
@@ -1776,6 +1776,7 @@ if st.session_state.role == "Employee":
               }
               events = run_agent(message_dict)
               process_events(events)
+              st.session_state.manual_submit_success = True
               st.rerun()
           except Exception as e:
             st.error(f"An error occurred: {e}")
