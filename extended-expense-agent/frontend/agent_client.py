@@ -112,6 +112,16 @@ def process_events(events, run_session_id=None, submitter_email=None):
         else:
           decision = final_output.get("decision") or "Approved"
           save_expense(final_output["expense"], decision)
+          
+          email_body = final_output.get("notification_email")
+          if email_body:
+              subject = email_body.split("Subject: ")[1].split("\n")[0] if "Subject: " in email_body else "Expense Notification"
+              employee_email = final_output["expense"].get("submitter", "employee@acmecorp.com")
+              import datetime
+              now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+              from frontend.database import save_inbox_message
+              save_inbox_message(employee_email, now_str, subject, email_body)
+              
           if session_to_track:
             st.session_state.saved_session_ids.add(session_to_track)
           if final_output["expense"].get("is_manual_submit"):

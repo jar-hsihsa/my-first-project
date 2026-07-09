@@ -19,7 +19,8 @@ from expense_agent.agent import init_db
 
 from frontend.database import (
     _db_path, get_employee_expenses, get_all_expenses, save_expense, 
-    save_pending_approval, get_pending_count, get_all_pending_approvals, delete_pending_approval
+    save_pending_approval, get_pending_count, get_all_pending_approvals, delete_pending_approval,
+    get_employee_inbox, save_inbox_message, mark_inbox_read
 )
 from frontend.auth import (
     create_ui_session, verify_ui_session, delete_ui_session, verify_credentials
@@ -1275,6 +1276,13 @@ with st.sidebar:
     if st.button("My History", use_container_width=True, type="primary" if st.session_state.active_page == "My History" else "secondary"):
         st.session_state.active_page = "My History"
         st.rerun()
+    
+    inbox_list = get_employee_inbox(st.session_state.email)
+    unread_count = sum(1 for m in inbox_list if not m.get("is_read", True))
+    inbox_label = f"My Inbox ({unread_count})" if unread_count > 0 else "My Inbox"
+    if st.button(inbox_label, use_container_width=True, type="primary" if st.session_state.active_page == "My Inbox" else "secondary"):
+        st.session_state.active_page = "My Inbox"
+        st.rerun()
 
   st.markdown("---")
 
@@ -1786,10 +1794,6 @@ if st.session_state.role == "Employee":
   
   
     # ── Progress / Final output ────────────────────
-    if st.session_state.agent_messages:
-      with st.expander(" Submission Progress", expanded=True):
-        for msg in st.session_state.agent_messages:
-          st.markdown(msg)
   
     # ── My Expenses Table ────────────────────────────────────
   @st.fragment(run_every="5s")
@@ -1899,22 +1903,22 @@ if st.session_state.role == "Employee":
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
           
-          # Extract original conversion note if present in description
           desc = exp.get('description', '—')
           amount_display = f"${exp.get('amount',0):.2f}"
-          import re
-          match = re.search(r'\[Original: ([\d.]+) ([A-Z]+) converted at', desc)
-          if match:
-              orig_amt = match.group(1)
-              orig_cur = match.group(2)
-              amount_display = f"{orig_amt} {orig_cur}<br><small style='color:gray'>≈ ${exp.get('amount',0):.2f} USD</small>"
-              desc = re.sub(r' \[Original: .*?\]', '', desc)
+          
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}"
+          else:
+              original_display = "—"
 
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
             <td><strong>{amount_display}</strong></td>
+            <td>{original_display}</td>
             <td>{_esc(desc[:60])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
@@ -1926,6 +1930,7 @@ if st.session_state.role == "Employee":
       <th>Date</th>
       <th>Category</th>
       <th>Amount</th>
+      <th>Original</th>
       <th>Description</th>
       <th>Status</th>
     </tr></thead>
@@ -1937,12 +1942,33 @@ if st.session_state.role == "Employee":
         st.info("No expenses match the selected filters.")
     else:
       st.markdown("""
-        <div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-top: 1rem;">
-            <div style="font-size: 3rem; margin-bottom: 1rem;">📭</div>
+        <div style="text-align: center; padding: 4rem; color: #6b7280; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📫</div>
             <h3 style="margin-bottom: 0.5rem; color: #111827;">No Past Expenses!</h3>
             <p>You haven't submitted any expenses yet. Go to the Submit Expense tab to get started.</p>
         </div>
       """, unsafe_allow_html=True)
+
+  if st.session_state.active_page == "My Inbox":
+    st.markdown('<div class="section-title">My Inbox</div>', unsafe_allow_html=True)
+    inbox_messages = get_employee_inbox(st.session_state.email)
+    mark_inbox_read(st.session_state.email)
+    
+    if not inbox_messages:
+      st.markdown("""
+        <div style="text-align: center; padding: 4rem; color: #6b7280; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📭</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Empty</h3>
+            <p>You have no new notifications.</p>
+        </div>
+      """, unsafe_allow_html=True)
+    else:
+      for msg in inbox_messages:
+          msg_date = msg.get("date", "Unknown Date")
+          subject = msg.get("subject", "Notification")
+          body = msg.get("body", "")
+          with st.expander(f"**{_esc(subject)}**  |  *{_esc(msg_date)}*"):
+              st.markdown(body)
 
   if st.session_state.active_page == "My History":
     render_employee_expenses()
@@ -1952,7 +1978,6 @@ if st.session_state.role == "Employee":
 # ║ ADMIN DASHBOARD                     ║
 # ╚═══════════════════════════════════════════════════════════╝
 elif st.session_state.role == "Admin":
-  @st.fragment(run_every="5s")
   @st.dialog("Receipt Preview")
   def show_receipt_dialog(img_data):
       st.image(img_data, use_container_width=True)
@@ -2093,6 +2118,7 @@ elif st.session_state.role == "Admin":
         amount_str = details.get("amount", "0.00")
         description_str = details.get("description", "—")
         risk_str = details.get("risk", "N/A")
+        
         has_security = details.get("security_flag", False)
         has_injection = details.get("injection", False)
         pii_info = details.get("pii", "")
@@ -2102,6 +2128,16 @@ elif st.session_state.role == "Admin":
           exp_data = json.loads(raw_json_str)
         except Exception:
           exp_data = {}
+          
+        amount_display = f"${_esc(amount_str)}"
+        orig_amt = exp_data.get("original_amount")
+        orig_cur = exp_data.get("original_currency")
+        if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+            rate = exp_data.get("exchange_rate")
+            rate_str = f" <small style='color:gray;'>(Rate: 1 {_esc(str(orig_cur))} = ${_esc(str(rate))} USD)</small>" if rate else ""
+            original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}{rate_str}"
+        else:
+            original_display = "—"
           
         exp_date = exp_data.get("date", date.today().strftime('%d %b %Y'))
         exp_category = exp_data.get("category", "—")
@@ -2117,7 +2153,7 @@ elif st.session_state.role == "Admin":
           f"""<table class="expense-table">
   <thead><tr>
     <th>Expense ID</th><th>Employee</th><th>Date</th>
-    <th>Amount</th><th>Category</th><th>Status</th>
+    <th>Amount</th><th>Original</th><th>Category</th><th>Status</th>
   </tr></thead>
   <tbody>
   <tr class="row-selected">
@@ -2132,7 +2168,8 @@ elif st.session_state.role == "Admin":
       </div>
     </td>
     <td>{_esc(exp_date)}</td>
-    <td><strong>${_esc(amount_str)}</strong></td>
+    <td><strong>{amount_display}</strong></td>
+    <td>{original_display}</td>
     <td>{_esc(exp_category)}</td>
     <td><span class="status-badge status-awaiting">Awaiting Approval</span></td>
   </tr>
@@ -2163,7 +2200,7 @@ elif st.session_state.role == "Admin":
     <div class="detail-label">Date:</div>
     <div class="detail-value">{_esc(exp_date)}</div>
     <div class="detail-label">Amount:</div>
-    <div class="detail-value"><strong>${_esc(amount_str)}</strong></div>
+    <div class="detail-value"><strong>{amount_display}</strong></div>
     <div class="detail-label">Category:</div>
     <div class="detail-value">{_esc(exp_category)} (Threshold: ${threshold:.2f})</div>
     <div class="detail-label">Purpose:</div>
@@ -2214,9 +2251,22 @@ elif st.session_state.role == "Admin":
           exp = out.get("expense", {})
           decision = out.get("decision", "N/A")
           reason = out.get("reason", "")
+          email_mock = out.get("notification_email", "")
           status_cls = (
             "status-approved" if decision == "Approved" else ("status-auto-approved" if decision == "Auto-Approved" else "status-rejected")
           )
+          
+          email_html = ""
+            
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              rate = exp.get("exchange_rate")
+              rate_str = f" <small style='color:gray;'>(Rate: 1 {_esc(str(orig_cur))} = ${_esc(str(rate))} USD)</small>" if rate else ""
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}{rate_str}"
+          else:
+              original_display = "—"
+          
           st.markdown(
             f"""<div class="detail-card">
   <div class="detail-header">
@@ -2235,6 +2285,7 @@ elif st.session_state.role == "Admin":
     <div class="detail-label">Reason:</div>
     <div class="detail-value">{_esc(reason)}</div>
   </div>
+  {email_html}
 </div>""",
             unsafe_allow_html=True,
           )
@@ -2326,6 +2377,17 @@ elif st.session_state.role == "Admin":
           emp_name = _display_name(exp.get("submitter", ""))
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
+          
+          desc = exp.get('description','—')
+          amount_display = f"${exp.get('amount',0):.2f}"
+          
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}"
+          else:
+              original_display = "—"
+              
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>
@@ -2338,8 +2400,9 @@ elif st.session_state.role == "Admin":
             </td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
-            <td><strong>${exp.get('amount',0):.2f}</strong></td>
-            <td>{_esc(exp.get('description','—')[:40])}</td>
+            <td><strong>{amount_display}</strong></td>
+            <td>{original_display}</td>
+            <td>{_esc(desc[:40])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
 
@@ -2351,6 +2414,7 @@ elif st.session_state.role == "Admin":
               <th>Date</th>
               <th>Category</th>
               <th>Amount</th>
+              <th>Original</th>
               <th>Description</th>
               <th>Status</th>
             </tr></thead>

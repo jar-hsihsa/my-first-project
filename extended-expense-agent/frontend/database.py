@@ -17,7 +17,7 @@ def get_employee_expenses(email: str) -> list[dict]:
       conn.row_factory = sqlite3.Row
       cur = conn.cursor()
       cur.execute(
-        "SELECT id, amount, submitter, category, description, date, status FROM expenses WHERE submitter = ? ORDER BY id DESC",
+        "SELECT id, amount, submitter, category, description, date, status, original_amount, original_currency FROM expenses WHERE submitter = ? ORDER BY id DESC",
         (email,),
       )
       return [dict(r) for r in cur.fetchall()]
@@ -32,7 +32,7 @@ def get_all_expenses() -> list[dict]:
       conn.row_factory = sqlite3.Row
       cur = conn.cursor()
       cur.execute(
-        "SELECT id, amount, submitter, category, description, date, status FROM expenses ORDER BY id DESC"
+        "SELECT id, amount, submitter, category, description, date, status, original_amount, original_currency FROM expenses ORDER BY id DESC"
       )
       return [dict(r) for r in cur.fetchall()]
   except Exception:
@@ -48,14 +48,16 @@ def save_expense(expense: dict, status: str):
     with sqlite3.connect(_db_path()) as conn:
       cur = conn.cursor()
       cur.execute(
-        "INSERT INTO expenses (amount, submitter, category, description, date, status) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO expenses (amount, submitter, category, description, date, status, original_amount, original_currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
           expense.get("amount", 0.0),
           expense.get("submitter", ""),
           expense.get("category", ""),
           expense.get("description", ""),
           expense.get("date", ""),
-          status
+          status,
+          expense.get("original_amount"),
+          expense.get("original_currency")
         )
       )
       conn.commit()
@@ -111,3 +113,41 @@ def delete_pending_approval(record_id: int):
     pass
 
 
+def get_employee_inbox(email: str) -> list[dict]:
+  """Return all inbox messages for the given employee email."""
+  try:
+    with sqlite3.connect(_db_path()) as conn:
+      conn.row_factory = sqlite3.Row
+      cur = conn.cursor()
+      cur.execute(
+        "SELECT id, date, subject, body, is_read FROM inbox WHERE employee_email = ? ORDER BY id DESC",
+        (email,),
+      )
+      return [dict(r) for r in cur.fetchall()]
+  except Exception as e:
+    logging.error(f"Error fetching inbox: {e}")
+    return []
+
+def mark_inbox_read(email: str):
+  """Mark all messages for a given employee as read."""
+  try:
+    with sqlite3.connect(_db_path()) as conn:
+      conn.execute(
+        "UPDATE inbox SET is_read = 1 WHERE employee_email = ?",
+        (email,)
+      )
+      conn.commit()
+  except Exception as e:
+    logging.error(f"Error marking inbox as read: {e}")
+
+def save_inbox_message(employee_email: str, date: str, subject: str, body: str):
+  """Save a notification email to the employee's inbox."""
+  try:
+    with sqlite3.connect(_db_path()) as conn:
+      conn.execute(
+        "INSERT INTO inbox (employee_email, date, subject, body, is_read) VALUES (?, ?, ?, ?, 0)",
+        (employee_email, date, subject, body)
+      )
+      conn.commit()
+  except Exception as e:
+    logging.error(f"Error saving inbox message: {e}")
