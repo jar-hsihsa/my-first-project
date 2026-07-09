@@ -44,7 +44,7 @@ if use_vertex:
         os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id or "")
     except Exception:
         pass
-    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 
 # Load company policies once at module startup (Bug #6: avoid repeated file I/O per request)
@@ -114,6 +114,16 @@ def init_db():
                 role TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 expires_at DATETIME NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS inbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_email TEXT,
+                date TEXT,
+                subject TEXT,
+                body TEXT,
+                is_read BOOLEAN DEFAULT 0
             )
         """)
         conn.commit()
@@ -331,6 +341,8 @@ def parse_expense_node(ctx: Context, node_input: Any):
                 usd_amount, rate, err_note = convert_to_usd(expense_dict["amount"], currency, expense_dict["date"])
                 expense_dict["exchange_rate"] = rate
                 expense_dict["amount"] = usd_amount
+                
+                
                 # Bug #2: Surface conversion failure so admin/employee can see it
                 if err_note:
                     expense_dict["description"] = f"[Warning: {err_note}] {expense_dict.get('description', '')}"
@@ -864,25 +876,43 @@ def notification_node(ctx: Context, node_input: dict) -> Event:
     reason = node_input.get("reason", "N/A")
     risk = node_input.get("risk_assessment", "N/A")
     submitter = expense.get("submitter", "employee@acmecorp.com")
-    
-    email_subject = f"Notification: Your Expense Report has been {decision}"
-    
     amount_str = f"${expense.get('amount', 0.0)}"
     if expense.get("original_currency") and expense.get("original_currency").upper() != "USD":
         amount_str = f"{expense.get('original_amount')} {expense.get('original_currency')} (Converted to ${expense.get('amount', 0.0)} USD)"
 
-    email_body = (
-        f"To: {submitter}\n"
-        f"From: expense-system@acmecorp.com\n"
-        f"Subject: {email_subject}\n\n"
-        f"Dear Employee,\n\n"
-        f"Your expense report submitted on {expense.get('date', 'N/A')} for the amount of "
-        f"{amount_str} ({expense.get('category', 'N/A')}) has been {decision}.\n\n"
-        f"Reason: {reason}\n"
-        f"Risk Assessment Details: {risk}\n\n"
-        f"Regards,\n"
-        f"Corporate Expense Team"
-    )
+    desc_preview = expense.get('description', 'No Description')[:25]
+    if len(expense.get('description', 'No Description')) > 25: desc_preview += '...'
+    email_subject = f"Notification: Your {amount_str} Expense ({desc_preview}) has been {decision.upper()}"
+
+    recommendation = "For rejected expenses, please review the reason provided above and adjust your submission accordingly to comply with corporate policy. For approved expenses, no further action is required."
+    status_color = "🟢 APPROVED" if decision.upper() == "APPROVED" else ("🟡 AUTO-APPROVED" if decision.upper() == "AUTO-APPROVED" else "🔴 REJECTED")
+    
+    email_body = f"""**To:** {submitter}  
+**From:** expense-system@acmecorp.com  
+**Subject:** {email_subject}  
+
+---
+
+### Acme Corp Finance & Administration
+*Automated Expense Management System*
+
+Dear Employee,
+
+Your recent expense report has been reviewed. Below is the final determination of your submission.
+
+#### **Expense Details**
+- **Date:** {expense.get('date', 'N/A')}
+- **Amount:** {amount_str}
+- **Category:** {expense.get('category', 'N/A')}
+- **Status:** **{status_color}**
+
+#### **Reviewer Notes**
+> _{reason}_
+
+---
+
+*This is an automated message. Please do not reply directly to this email. For questions, contact the Finance Department.*
+"""
     
     # Store email body in state so frontend can fetch and display it
     ctx.state["notification_email"] = email_body

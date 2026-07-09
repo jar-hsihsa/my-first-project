@@ -17,6 +17,22 @@ nest_asyncio.apply()
 from expense_agent.agent_runtime_app import agent_runtime
 from expense_agent.agent import init_db
 
+from frontend.database import (
+    _db_path, get_employee_expenses, get_all_expenses, save_expense, 
+    save_pending_approval, get_pending_count, get_all_pending_approvals, delete_pending_approval,
+    get_employee_inbox, save_inbox_message, mark_inbox_read
+)
+from frontend.auth import (
+    create_ui_session, verify_ui_session, delete_ui_session, verify_credentials
+)
+from frontend.agent_client import (
+    run_agent, process_events, parse_interrupt_details
+)
+from frontend.helpers import (
+    get_base64_image, _esc, _esc_description, get_category_threshold, _initials, _display_name
+)
+
+
 # Bug #3: Load company policies once at module level — avoid 3x file reads per render
 _FRONTEND_POLICIES: dict = {}
 try:
@@ -29,6 +45,9 @@ except Exception:
 if "db_initialized" not in st.session_state:
   init_db()
   st.session_state.db_initialized = True
+
+if "active_page" not in st.session_state:
+  st.session_state.active_page = "Submit Expense"
 
 # Known-valid roles (Bug #8: prevent arbitrary role injection via query params)
 _VALID_ROLES = {"Employee", "Admin"}
@@ -57,12 +76,6 @@ st.set_page_config(
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "acme_logo.png")
 
-def get_base64_image(image_path):
-    try:
-        with open(image_path, "rb") as img_file:
-            return base64.b64encode(img_file.read()).decode("utf-8")
-    except Exception:
-        return ""
 
 logo_base64 = get_base64_image(LOGO_PATH)
 logo_img_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else ""
@@ -197,7 +210,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   margin-bottom: 0.25rem;
   border-bottom: 1px solid #E2E8F0;
 }
-.top-header h1 {
+.top-header .portal-title {
   font-size: 1.4rem;
   font-weight: 700;
   color: #1E293B;
@@ -606,7 +619,7 @@ body[data-theme="dark"] .excel-filter {
   color: #f8fafc !important;
   border-color: #334155 !important;
 }
-body[data-theme="dark"] .top-header h1 {
+body[data-theme="dark"] .top-header .portal-title {
   color: #f8fafc !important;
 }
 body[data-theme="dark"] .top-header-right {
@@ -1013,68 +1026,14 @@ for k, v in _defaults.items():
 # ──────────────────────────────────────────────────────────────
 # DB Helpers
 # ──────────────────────────────────────────────────────────────
-def _db_path():
-  dir_path = os.path.dirname(os.path.abspath(__file__))
-  return os.path.join(os.path.dirname(dir_path), "expenses.db")
 
 
 import uuid as _uuid
 
-def create_ui_session(email: str, role: str, hours: int = 8) -> str:
-  """Bug #17: Create an opaque, time-limited session token in the DB.
-  
-  Returns a random UUID string. The URL stores only this token — never the
-  credential-derived hash — so the URL cannot be used to derive passwords.
-  Token expires after `hours` hours (default 8h, a standard work day).
-  """
-  import datetime
-  token = str(_uuid.uuid4())
-  now = datetime.datetime.utcnow()
-  expires = now + datetime.timedelta(hours=hours)
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      # Clean up expired sessions for this user before inserting
-      conn.execute(
-        "DELETE FROM ui_sessions WHERE email = ? OR expires_at < ?",
-        (email, now.isoformat())
-      )
-      conn.execute(
-        "INSERT INTO ui_sessions (session_token, email, role, expires_at) VALUES (?, ?, ?, ?)",
-        (token, email, role, expires.isoformat())
-      )
-      conn.commit()
-  except Exception as e:
-    logging.error(f"create_ui_session error: {e}")
-  return token
 
 
-def verify_ui_session(token: str) -> tuple[str, str] | None:
-  """Bug #17: Verify an opaque session token. Returns (email, role) or None if invalid/expired."""
-  import datetime
-  try:
-    now = datetime.datetime.utcnow().isoformat()
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT email, role FROM ui_sessions WHERE session_token = ? AND expires_at > ?",
-        (token, now)
-      )
-      row = cur.fetchone()
-      if row:
-        return row[0], row[1]  # (email, role)
-  except Exception as e:
-    logging.error(f"verify_ui_session error: {e}")
-  return None
 
 
-def delete_ui_session(token: str) -> None:
-  """Bug #17: Delete a session token on logout."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.execute("DELETE FROM ui_sessions WHERE session_token = ?", (token,))
-      conn.commit()
-  except Exception as e:
-    logging.error(f"delete_ui_session error: {e}")
 
 
 # Bug #17: Opaque session token reload — verifies a short-lived UUID against the DB
@@ -1096,12 +1055,12 @@ if not st.session_state.logged_in:
                 # Invalid role — clear stale token
                 delete_ui_session(session_token)
                 st.query_params.clear()
-                st.info("⚠️ Session expired or invalid. Please sign in again.")
+                st.info("Warning: Session expired or invalid. Please sign in again.")
         else:
             # Token not found or expired
             st.query_params.clear()
             # Bug #9: Show clear message so users know why auto-login didn't work
-            st.info("⚠️ Session expired. Please sign in again.")
+            st.info("Warning: Session expired. Please sign in again.")
     else:
         # Legacy cleanup: remove old-style email/role/token params if present
         if any(k in st.query_params for k in ("email", "role", "token")):
@@ -1113,325 +1072,39 @@ if st.session_state.session_id is None:
   st.session_state.session_id = session["id"]
 
 
-def verify_credentials(email: str, password: str) -> bool:
-  """Verify user credentials against SQLite database."""
-  try:
-    hashed_pwd = hashlib.sha256(password.encode("utf-8")).hexdigest()  # Bug #10: hashlib now at module level
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT role FROM users WHERE email = ? AND password_hash = ?",
-        (email.strip(), hashed_pwd),
-      )
-      row = cur.fetchone()
-      return row is not None
-  except Exception as e:
-    # Bug #4: Log the real error so DB/infra issues are not silently swallowed
-    logging.exception(f"verify_credentials error for {email}: {e}")
-    return False
-
-
-def get_employee_expenses(email: str) -> list[dict]:
-  """Return all past expenses for the given submitter email."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.row_factory = sqlite3.Row
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT id, amount, submitter, category, description, date, status FROM expenses WHERE submitter = ? ORDER BY id DESC",
-        (email,),
-      )
-      return [dict(r) for r in cur.fetchall()]
-  except Exception:
-    return []
-
-
-def get_all_expenses() -> list[dict]:
-  """Return all expenses (for admin view)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.row_factory = sqlite3.Row
-      cur = conn.cursor()
-      cur.execute(
-        "SELECT id, amount, submitter, category, description, date, status FROM expenses ORDER BY id DESC"
-      )
-      return [dict(r) for r in cur.fetchall()]
-  except Exception:
-    return []
-
-
-def save_expense(expense: dict, status: str):
-  """Save a newly approved or rejected expense to the database.
-  
-  Uses a context manager to prevent connection leaks (Bug #4).
-  """
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute(
-        "INSERT INTO expenses (amount, submitter, category, description, date, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (
-          expense.get("amount", 0.0),
-          expense.get("submitter", ""),
-          expense.get("category", ""),
-          expense.get("description", ""),
-          expense.get("date", ""),
-          status
-        )
-      )
-      conn.commit()
-  except Exception as e:
-    # Bug #18: use structured logging instead of print() so errors appear in server logs
-    logging.error(f"Error saving expense: {e}")
-
-
-def save_pending_approval(session_id: str, interrupt_id: str, message: str, submitter_email: str, receipt_bytes: str = "", raw_json: str = ""):
-  """Save a pending approval record. Uses context manager to prevent connection leaks (Bug #4)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.execute(
-        "INSERT INTO pending_approvals (session_id, interrupt_id, message, receipt_bytes, submitter_email, raw_json) VALUES (?, ?, ?, ?, ?, ?)",
-        (session_id, interrupt_id, message, receipt_bytes, submitter_email, raw_json)
-      )
-      conn.commit()
-  except Exception as e:
-    # Bug #18: use structured logging instead of print()
-    logging.error(f"Error saving pending approval: {e}")
-
-
-def get_pending_count() -> int:
-  """Return count of pending approvals using COUNT(*) — avoids full table scan (Bug #14)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      cur = conn.cursor()
-      cur.execute("SELECT COUNT(*) FROM pending_approvals")
-      return cur.fetchone()[0]
-  except Exception:
-    return 0
 
 
 
-def get_all_pending_approvals() -> list[dict]:
-  """Return all pending approvals ordered by id. Uses context manager (Bug #4)."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.row_factory = sqlite3.Row
-      cur = conn.cursor()
-      cur.execute("SELECT * FROM pending_approvals ORDER BY id ASC")
-      return [dict(r) for r in cur.fetchall()]
-  except Exception:
-    return []
-
-def delete_pending_approval(record_id: int):
-  """Delete a pending approval by database row ID. Uses context manager."""
-  try:
-    with sqlite3.connect(_db_path()) as conn:
-      conn.execute("DELETE FROM pending_approvals WHERE id = ?", (record_id,))
-      conn.commit()
-  except Exception:
-    pass
 
 
-def _esc(value: str) -> str:
-  """HTML-escape a string for safe interpolation into unsafe_allow_html markup."""
-  return html_escape(str(value)) if value else "—"
 
 
-def _esc_description(value: str) -> str:
-  """HTML-escape a description string, rendering [Original: ...] and [Warning: ...] notes in styled badges."""
-  escaped = html_escape(str(value)) if value else "—"
-  import re
-  pattern = r'(\[Original:[^\]]+\])'
-  def replacer(match):
-    note = match.group(1)
-    return f'<strong class="conversion-badge">{note}</strong>'
-  
-  pattern_warning = r'(\[Warning:[^\]]+\])'
-  def warning_replacer(match):
-    note = match.group(1)
-    return f'<strong class="conversion-warning-badge">{note}</strong>'
-    
-  formatted = re.sub(pattern, replacer, escaped)
-  formatted = re.sub(pattern_warning, warning_replacer, formatted)
-  return formatted
 
 
-def get_category_threshold(email: str, category: str) -> float:
-  """Get the approval threshold for a category and email domain."""
-  # Bug #3: Use module-level cached policies instead of re-reading file per call
-  # Bug #10: os and json are now at module level, removed inner import
-  policies = _FRONTEND_POLICIES
-
-  domain = "default"
-  if email and "@" in email:
-    domain = email.split("@")[-1].lower()
-
-  company_policy = policies.get(domain, policies.get("default", {}))
-  
-  threshold = company_policy.get("Default", 100.0)
-  for cat_key, val in company_policy.items():
-    if cat_key.lower() == category.lower() and cat_key != "company_name":
-      threshold = val
-      break
-  return threshold
 
 
-def _initials(email: str) -> str:
-  """Generate initials from an email."""
-  name_part = email.split("@")[0]
-  parts = name_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
-  if len(parts) >= 2:
-    return (parts[0][0] + parts[1][0]).upper()
-  return name_part[:2].upper()
 
 
-def _display_name(email: str) -> str:
-  """Generate a display name from an email."""
-  name_part = email.split("@")[0]
-  parts = name_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
-  return " ".join(p.capitalize() for p in parts)
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ──────────────────────────────────────────────────────────────
 # Agent helpers
 # ──────────────────────────────────────────────────────────────
-def run_agent(payload_dict, specific_session_id=None):
-  session_id_to_use = specific_session_id if specific_session_id else st.session_state.session_id
-  
-  async def _run():
-    events = []
-    async for event in agent_runtime.async_stream_query(
-      message=payload_dict,
-      user_id="streamlit_user",
-      session_id=session_id_to_use,
-    ):
-      events.append(event)
-    return events
-    
-  return asyncio.run(_run())
 
 
-def process_events(events, run_session_id=None, submitter_email=None):
-  final_output = None
-  paused = False
-  session_to_track = run_session_id if run_session_id else st.session_state.session_id
-
-  for event in events:
-    content = event.get("content")
-    if content and "parts" in content:
-      for part in content["parts"]:
-        if "text" in part:
-          st.session_state.agent_messages.append(part["text"])
-        if "function_call" in part:
-          fn_call = part["function_call"]
-          if fn_call.get("name") == "adk_request_input":
-            args = fn_call.get("args", {})
-            st.session_state.interrupt_message = args.get(
-              "message", "Agent paused for human input."
-            )
-            st.session_state.interrupt_id = fn_call.get("id")
-            paused = True
-            
-            receipt_bytes = st.session_state.get("submitted_receipt_image", "")
-            raw_json = st.session_state.get("raw_json", "")
-            if "---JSON---" in st.session_state.interrupt_message:
-              parts = st.session_state.interrupt_message.split("---JSON---")
-              st.session_state.interrupt_message = parts[0].strip()
-              raw_json = parts[1].strip()
-              # Update session state with parsed values for future use if needed
-              st.session_state.raw_json = raw_json
 
 
-            if (
-              st.session_state.role == "Employee"
-              and not st.session_state.get("from_review_submit", False)
-              and (
-                args.get("interruptId") == "employee_review"
-                or args.get("interrupt_id") == "employee_review"
-                or fn_call.get("id") == "employee_review"
-              )
-            ):
-              import json
-              try:
-                st.session_state.review_expense_data = json.loads(raw_json)
-                st.session_state.review_session_to_track = session_to_track
-                st.session_state.review_is_paused = True
-                st.session_state.review_interrupt_id = fn_call.get("id")
-              except Exception:
-                pass
-            else:
-              save_pending_approval(
-                session_to_track,
-                fn_call.get("id"),
-                st.session_state.interrupt_message,
-                st.session_state.email,
-                receipt_bytes,
-                raw_json
-              )
-              try:
-                raw_json_data = json.loads(raw_json)
-                if raw_json_data.get("is_manual_submit"):
-                  st.session_state.manual_submit_success = True
-              except Exception:
-                pass
-
-    if "output" in event:
-      final_output = event["output"]
-
-  st.session_state.waiting_for_input = paused
-  if not paused and final_output:
-    st.session_state.final_output = final_output
-    if isinstance(final_output, dict) and "expense" in final_output:
-      # Session-level guard: only save once per ADK session to prevent
-      # duplicate inserts caused by Streamlit reruns re-executing this block.
-      already_saved = session_to_track in st.session_state.get("saved_session_ids", set())
-      if not already_saved:
-        if submitter_email:
-          final_output["expense"]["submitter"] = submitter_email
-        elif not final_output["expense"].get("submitter") or final_output["expense"]["submitter"] == "employee@acmecorp.com":
-          final_output["expense"]["submitter"] = st.session_state.email
-          
-        if (
-          st.session_state.role == "Employee"
-          and not st.session_state.get("from_review_submit", False)
-          and not final_output["expense"].get("is_manual_submit")
-        ):
-          st.session_state.review_expense_data = final_output["expense"]
-          st.session_state.review_session_to_track = session_to_track
-        else:
-          decision = final_output.get("decision") or "Approved"
-          save_expense(final_output["expense"], decision)
-          if session_to_track:
-            st.session_state.saved_session_ids.add(session_to_track)
-          if final_output["expense"].get("is_manual_submit"):
-            st.session_state.manual_submit_success = True
-
-
-def parse_interrupt_details(msg: str) -> dict:
-  """Best-effort extraction of structured data from the interrupt message."""
-  details = {}
-  for line in msg.splitlines():
-    line = line.strip()
-    if line.startswith("Expense of $"):
-      try:
-        rest = line[len("Expense of $"):]
-        amt_str, rest2 = rest.split(" by ", 1)
-        details["amount"] = amt_str.strip()
-        sub_str, rest3 = rest2.split(" for '", 1)
-        details["submitter"] = sub_str.strip()
-        desc_str = rest3.rsplit("' requires review", 1)[0]
-        details["description"] = desc_str.strip()
-      except Exception:
-        pass
-    if "Risk Assessment:" in line:
-      details["risk"] = line.split("Risk Assessment:", 1)[1].strip()
-    if "SECURITY EVENT FLAGGED" in line:
-      details["security_flag"] = True
-    if "Prompt Injection Detected" in line:
-      details["injection"] = True
-    if "Redacted PII Categories:" in line:
-      details["pii"] = line.split("Redacted PII Categories:", 1)[1].strip()
-  return details
 
 
 # ╔═══════════════════════════════════════════════════════════╗
@@ -1520,24 +1193,13 @@ if not st.session_state.logged_in:
       
       elif st.session_state.selected_login_role == "Employee":
         employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 6, 7]]  # Bug #19: Added Employee 6
-        selected_employee = st.selectbox("Select Employee", options=employee_names)
-        password = st.text_input("Password", type="password", value="")
-        
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
-            st.session_state.selected_login_role = None
-            st.session_state.emp_prev_state = (None, "")
-            st.rerun()
-        with col_b2:
-          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
-          
-        current_state = (selected_employee, password)
-        previous_state = st.session_state.get("emp_prev_state", (None, ""))
-        enter_pressed = (password != "") and (current_state != previous_state)
-        
-        if signin_clicked or enter_pressed:
-          st.session_state.emp_prev_state = current_state
+            
+        with st.form("employee_login_form"):
+            selected_employee = st.selectbox("Select Employee", options=employee_names)
+            password = st.text_input("Password", type="password", value="")
+            signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+            
+        if signin_clicked:
           emp_num = selected_employee.split(" ")[1]
           email = f"employee{emp_num}@acmecorp.com"
           if verify_credentials(email, password):
@@ -1557,24 +1219,12 @@ if not st.session_state.logged_in:
             st.error("Invalid password. Please try again.")
             
       elif st.session_state.selected_login_role == "Admin":
-        email = st.text_input("Corporate Email", value="admin@acmecorp.com")
-        password = st.text_input("Password", type="password", value="")
+        with st.form("admin_login_form"):
+            email = st.text_input("Corporate Email", value="admin@acmecorp.com")
+            password = st.text_input("Password", type="password", value="")
+            signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
 
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
-            st.session_state.selected_login_role = None
-            st.session_state.admin_prev_state = (None, "")
-            st.rerun()
-        with col_b2:
-          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
-
-        current_state = (email, password)
-        previous_state = st.session_state.get("admin_prev_state", (None, ""))
-        enter_pressed = (password != "") and (current_state != previous_state)
-
-        if signin_clicked or enter_pressed:
-          st.session_state.admin_prev_state = current_state
+        if signin_clicked:
           if email.strip():
             if verify_credentials(email, password):
               st.session_state.logged_in = True
@@ -1615,13 +1265,24 @@ with st.sidebar:
   if st.session_state.role == "Admin":
     # Bug #14: Use COUNT(*) query instead of fetching all rows just for the count
     pending_count = get_pending_count()
-    badge = f'<span class="nav-badge">{pending_count}</span>' if pending_count else ""
-    st.markdown(
-      f'<div class="nav-active">Pending Approvals {badge}</div>',
-      unsafe_allow_html=True,
-    )
+    btn_label = f"Pending Approvals ({pending_count})" if pending_count else "Pending Approvals"
+    if st.button(btn_label, use_container_width=True, type="primary"):
+        st.session_state.admin_scroll = "pending_approvals"
+        st.rerun()
   else:
-    st.markdown('<div class="nav-active">Submit Expense</div>', unsafe_allow_html=True)
+    if st.button("Submit Expense", use_container_width=True, type="primary" if st.session_state.active_page == "Submit Expense" else "secondary"):
+        st.session_state.active_page = "Submit Expense"
+        st.rerun()
+    if st.button("My History", use_container_width=True, type="primary" if st.session_state.active_page == "My History" else "secondary"):
+        st.session_state.active_page = "My History"
+        st.rerun()
+    
+    inbox_list = get_employee_inbox(st.session_state.email)
+    unread_count = sum(1 for m in inbox_list if not m.get("is_read", True))
+    inbox_label = f"My Inbox ({unread_count})" if unread_count > 0 else "My Inbox"
+    if st.button(inbox_label, use_container_width=True, type="primary" if st.session_state.active_page == "My Inbox" else "secondary"):
+        st.session_state.active_page = "My Inbox"
+        st.rerun()
 
   st.markdown("---")
 
@@ -1678,7 +1339,7 @@ role_label = st.session_state.role
 
 st.markdown(
   f"""<div class="top-header">
-    <h1>Expense Approval Portal</h1>
+    <div class="portal-title">Expense Approval Portal</div>
     <div class="top-header-right">
       <span>Welcome, {_esc(display)} ({_esc(role_label)})</span>
       <span class="user-avatar">{_esc(initials)}</span>
@@ -1695,444 +1356,446 @@ if st.session_state.role == "Employee":
   
 
   # ── Submit New Expense ───────────────────────────────────
-  st.markdown(
-    '<div class="section-title">Submit New Expense</div>',
-    unsafe_allow_html=True,
-  )
-
-  tab_receipt, tab_form = st.tabs(["Upload Receipt", "Fill Expense Form"])
-
-  with tab_receipt:
-    uploaded_file = st.file_uploader(
-      "Upload Receipt Image",
-      type=["png", "jpg", "jpeg"],
-      label_visibility="collapsed",
-      key=f"receipt_uploader_{st.session_state.get('uploader_key', 1)}"
+  if st.session_state.active_page == "Submit Expense":
+    st.markdown(
+      '<div class="section-title">Submit New Expense</div>',
+      unsafe_allow_html=True,
     )
-
-    has_demo = "demo_receipt_bytes" in st.session_state and st.session_state.demo_receipt_bytes
-
-    col_d1, col_d2 = st.columns([1.5, 3])
-    with col_d1:
-      if not has_demo:
-        if st.button("Load Demo Receipt"):
-          try:
-            import random
-            import json
-            receipts = [
-              "demo_receipt_eur.png",
-              "demo_receipt_gbp.png",
-              "demo_receipt_jpy.png",
-              "demo_receipt_inr.png",
-              "demo_receipt_cad.png",
-            ]
-            
-            state_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".last_receipt.json")
-            last_chosen = None
+    
+    tab_receipt, tab_form = st.tabs(["Upload Receipt", "Fill Expense Form"])
+  
+    with tab_receipt:
+      uploaded_file = st.file_uploader(
+        "Upload Receipt Image",
+        type=["png", "jpg", "jpeg"],
+        label_visibility="collapsed",
+        key=f"receipt_uploader_{st.session_state.get('uploader_key', 1)}"
+      )
+  
+      has_demo = "demo_receipt_bytes" in st.session_state and st.session_state.demo_receipt_bytes
+  
+      col_d1, col_d2 = st.columns([1.5, 3])
+      with col_d1:
+        if not has_demo:
+          if st.button("Load Demo Receipt"):
             try:
-              if os.path.exists(state_file):
-                with open(state_file, "r") as f:
-                  last_chosen = json.load(f).get("last_receipt")
-            except Exception:
-              pass
-
-            available = [r for r in receipts if r != last_chosen]
-            chosen_receipt = random.choice(available if available else receipts)
-            
-            try:
-              with open(state_file, "w") as f:
-                json.dump({"last_receipt": chosen_receipt}, f)
-            except Exception:
-              pass
+              import random
+              import json
+              receipts = [
+                "demo_receipt_eur.png",
+                "demo_receipt_gbp.png",
+                "demo_receipt_jpy.png",
+                "demo_receipt_inr.png",
+                "demo_receipt_cad.png",
+              ]
               
-            st.session_state.last_chosen_receipt = chosen_receipt
-            st.session_state.demo_receipt_name = chosen_receipt
-            demo_path = os.path.join(
-              os.path.dirname(os.path.dirname(__file__)),
-              chosen_receipt,
-            )
-            with open(demo_path, "rb") as f:
-              st.session_state.demo_receipt_bytes = f.read()
-            st.rerun()
-          except Exception as e:
-            st.error(f"Could not load demo receipt: {e}")
-      else:
-        if st.button("Remove Demo Receipt"):
-          st.session_state.demo_receipt_bytes = None
-          st.session_state.demo_receipt_name = None
-          st.rerun()
-
-    image_to_submit = None
-    mime_type = "image/png"
-
-    if uploaded_file is not None:
-      image_to_submit = uploaded_file.getvalue()
-      mime_type = uploaded_file.type
-    elif (
-      "demo_receipt_bytes" in st.session_state
-      and st.session_state.demo_receipt_bytes
-    ):
-      image_to_submit = st.session_state.demo_receipt_bytes
-      filename = st.session_state.get("demo_receipt_name", "Other.png")
-      import re
-      name_part, ext_part = os.path.splitext(filename)
-      category_name = re.sub(r'_\d+$', '', name_part)
-      category_name = category_name.replace('_', ' ')
-      ext_lower = ext_part.replace(".", "").lower()
-      formatted_caption = f"{category_name}.{ext_lower}"
-
-    if image_to_submit is None:
-        st.session_state.review_expense_data = None
-        st.session_state.review_session_to_track = None
-        st.session_state.review_is_paused = False
-        st.session_state.uploaded_filename = None
-        st.session_state.from_review_submit = False
-        st.session_state.review_submitted_success = False
-
-    if st.session_state.get("review_expense_data"):
-      st.markdown('<div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem;">Review & Confirm Details</div>', unsafe_allow_html=True)
-      st.info("Please review the auto-extracted details below. Make any necessary corrections before submitting.")
-      
-      col_img, col_rev = st.columns([1, 1.2])
-      
-      with col_img:
-        if image_to_submit:
-            st.image(image_to_submit, caption="Uploaded Receipt", use_container_width=True)
-            
-      with col_rev:
-        exp_data = st.session_state.review_expense_data
-        
-        orig_currency = exp_data.get("original_currency", exp_data.get("currency", "USD"))
-        usd_amount = exp_data.get("amount", 0.0)
-
-        is_success = st.session_state.get("review_submitted_success", False)
-        with st.form("review_form"):
-          rev_amount = st.number_input("Amount", value=float(usd_amount), disabled=is_success)
-          
-          if orig_currency.upper() != "USD" and "exchange_rate" in exp_data:
-            st.caption(f"*(Converted to USD using live rate: 1 {orig_currency.upper()} = ${exp_data.get('exchange_rate')} USD)*")
-
-          all_currencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AWG", "AZN", "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CDF", "CLP", "COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "FJD", "FKP", "FOK", "GEL", "GGP", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS", "IMP", "IQD", "IRR", "ISK", "JEP", "JMD", "JOD", "KES", "KGS", "KHR", "KID", "KMF", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SLL", "SOS", "SRD", "SSP", "STN", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TVD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD", "XDR", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"]
-          curr_val = orig_currency.upper()
-          curr_idx = all_currencies.index(curr_val) if curr_val in all_currencies else 0
-          rev_currency = st.selectbox("Currency", options=all_currencies, index=curr_idx, disabled=is_success)
-          
-          rev_vendor = st.text_input("Vendor", value=exp_data.get("vendor", ""), disabled=is_success)
-          
-          categories = ["Meals", "Travel", "Equipment", "Office Supplies", "Software", "Miscellaneous"]
-          cat_val = exp_data.get("category", "Miscellaneous")
-          cat_idx = categories.index(cat_val) if cat_val in categories else 5
-          rev_category = st.selectbox("Category", options=categories, index=cat_idx, disabled=is_success)
-          
-          try:
-            import datetime
-            parsed_date = datetime.datetime.strptime(exp_data.get("date", ""), "%Y-%m-%d").date()
-          except Exception:
-            import datetime
-            parsed_date = datetime.date.today()
-            
-          rev_date = st.date_input("Date on Receipt", value=parsed_date, disabled=is_success)
-          rev_desc = st.text_area("Description", value=exp_data.get("description", ""), disabled=is_success)
-          
-          if not is_success:
-            col_submit, col_cancel = st.columns(2)
-            with col_submit:
-              submitted = st.form_submit_button("Confirm & Submit", type="primary", use_container_width=True)
-            with col_cancel:
-              canceled = st.form_submit_button("Cancel", use_container_width=True)
-          else:
-            submitted = False
-            canceled = False
-            st.form_submit_button("Submitted", disabled=True, use_container_width=True)
-            
-          if submitted:
-            resubmit_payload = {
-                "amount": rev_amount,
-                "currency": rev_currency,
-                "vendor": rev_vendor,
-                "category": rev_category,
-                "date": rev_date.strftime("%Y-%m-%d"),
-                "description": rev_desc,
-                "submitter": st.session_state.email,
-                "is_ui_resubmit": True,
-                "original_amount": exp_data.get("original_amount"),
-                "original_currency": exp_data.get("original_currency"),
-                "exchange_rate": exp_data.get("exchange_rate"),
-                "ocr_amount": float(exp_data.get("original_amount", exp_data.get("amount", 0.0))),
-                "ocr_currency": exp_data.get("original_currency", exp_data.get("currency", "USD")),
-                "ocr_vendor": exp_data.get("vendor", ""),
-                "ocr_category": exp_data.get("category", ""),
-                "ocr_date": exp_data.get("date", "")
-            }
-            
-            with st.spinner("Applying Acme Corp policies to updated data..."):
-                st.session_state.from_review_submit = True
-                import json
-                message_dict = {
-                    "parts": [{"text": json.dumps({"expense": resubmit_payload})}],
-                    "role": "user",
-                }
+              state_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".last_receipt.json")
+              last_chosen = None
+              try:
+                if os.path.exists(state_file):
+                  with open(state_file, "r") as f:
+                    last_chosen = json.load(f).get("last_receipt")
+              except Exception:
+                pass
+  
+              available = [r for r in receipts if r != last_chosen]
+              chosen_receipt = random.choice(available if available else receipts)
+              
+              try:
+                with open(state_file, "w") as f:
+                  json.dump({"last_receipt": chosen_receipt}, f)
+              except Exception:
+                pass
                 
-                # We reuse the existing session_id that is already in st.session_state 
-                # so we don't clutter the backend with multiple sessions for one expense.
-                
-                events = run_agent(message_dict)
-                process_events(events)
-                
-            st.session_state.review_is_paused = False
-            st.session_state.from_review_submit = False
-            st.session_state.review_submitted_success = True
-            st.rerun()
-            
-          if canceled:
-            st.session_state.review_expense_data = None
-            st.session_state.review_session_to_track = None
+              st.session_state.last_chosen_receipt = chosen_receipt
+              st.session_state.demo_receipt_name = chosen_receipt
+              demo_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                chosen_receipt,
+              )
+              with open(demo_path, "rb") as f:
+                st.session_state.demo_receipt_bytes = f.read()
+              st.rerun()
+            except Exception as e:
+              st.error(f"Could not load demo receipt: {e}")
+        else:
+          if st.button("Remove Demo Receipt"):
             st.session_state.demo_receipt_bytes = None
             st.session_state.demo_receipt_name = None
-            st.session_state.uploader_key = st.session_state.get('uploader_key', 1) + 1
             st.rerun()
-            
-        if is_success:
-            st.success("Expense processed successfully and routed to Admin if required!")
-            if st.button("Submit Another Receipt", type="primary"):
-                st.session_state.review_expense_data = None
-                st.session_state.review_session_to_track = None
-                st.session_state.demo_receipt_bytes = None
-                st.session_state.demo_receipt_name = None
-                st.session_state.uploader_key = st.session_state.get('uploader_key', 1) + 1
-                st.session_state.review_submitted_success = False
-                st.rerun()
-            
-    else:
-      if image_to_submit is not None:
-        st.image(image_to_submit, caption="Uploaded Receipt", width=500)
-
-
-
-    if not st.session_state.get("review_expense_data"):
-      if st.button(
-        "Extract Details",
-        type="primary",
-        use_container_width=True,
-        key="submit_receipt",
+  
+      image_to_submit = None
+      mime_type = "image/png"
+  
+      if uploaded_file is not None:
+        image_to_submit = uploaded_file.getvalue()
+        mime_type = uploaded_file.type
+      elif (
+        "demo_receipt_bytes" in st.session_state
+        and st.session_state.demo_receipt_bytes
       ):
+        image_to_submit = st.session_state.demo_receipt_bytes
+        filename = st.session_state.get("demo_receipt_name", "Other.png")
+        import re
+        name_part, ext_part = os.path.splitext(filename)
+        category_name = re.sub(r'_\d+$', '', name_part)
+        category_name = category_name.replace('_', ' ')
+        ext_lower = ext_part.replace(".", "").lower()
+        formatted_caption = f"{category_name}.{ext_lower}"
+  
+      if image_to_submit is None:
+          st.session_state.review_expense_data = None
+          st.session_state.review_session_to_track = None
+          st.session_state.review_is_paused = False
+          st.session_state.uploaded_filename = None
+          st.session_state.from_review_submit = False
+          st.session_state.review_submitted_success = False
+  
+      if st.session_state.get("review_expense_data"):
+        st.markdown('<div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem;">Review & Confirm Details</div>', unsafe_allow_html=True)
+        st.info("Please review the auto-extracted details below. Make any necessary corrections before submitting.")
+        
+        col_img, col_rev = st.columns([1, 1.2])
+        
+        with col_img:
+          if image_to_submit:
+              st.image(image_to_submit, caption="Uploaded Receipt", use_container_width=True)
+              
+        with col_rev:
+          exp_data = st.session_state.review_expense_data
+          
+          orig_currency = exp_data.get("original_currency", exp_data.get("currency", "USD"))
+          usd_amount = exp_data.get("amount", 0.0)
+  
+          is_success = st.session_state.get("review_submitted_success", False)
+          with st.form("review_form"):
+            rev_amount = st.number_input("Amount (USD)", value=float(usd_amount), disabled=is_success)
+            
+            if orig_currency.upper() != "USD" and "exchange_rate" in exp_data:
+              st.caption(f"*(Converted to USD using live rate: 1 {orig_currency.upper()} = ${exp_data.get('exchange_rate')} USD)*")
+  
+            all_currencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR", "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AWG", "AZN", "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CDF", "CLP", "COP", "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", "ERN", "ETB", "FJD", "FKP", "FOK", "GEL", "GGP", "GHS", "GIP", "GMD", "GNF", "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS", "IMP", "IQD", "IRR", "ISK", "JEP", "JMD", "JOD", "KES", "KGS", "KHR", "KID", "KMF", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLE", "SLL", "SOS", "SRD", "SSP", "STN", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", "TRY", "TTD", "TVD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", "VND", "VUV", "WST", "XAF", "XCD", "XDR", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"]
+            curr_val = "USD"
+            curr_idx = all_currencies.index(curr_val) if curr_val in all_currencies else 0
+            rev_currency = st.selectbox("Currency", options=all_currencies, index=curr_idx, disabled=is_success)
+            
+            rev_vendor = st.text_input("Vendor", value=exp_data.get("vendor", ""), disabled=is_success)
+            
+            categories = ["Meals", "Travel", "Equipment", "Office Supplies", "Software", "Miscellaneous"]
+            cat_val = exp_data.get("category", "Miscellaneous")
+            cat_idx = categories.index(cat_val) if cat_val in categories else 5
+            rev_category = st.selectbox("Category", options=categories, index=cat_idx, disabled=is_success)
+            
+            try:
+              import datetime
+              parsed_date = datetime.datetime.strptime(exp_data.get("date", ""), "%Y-%m-%d").date()
+            except Exception:
+              import datetime
+              parsed_date = datetime.date.today()
+              
+            rev_date = st.date_input("Date on Receipt", value=parsed_date, disabled=is_success)
+            rev_desc = st.text_area("Description", value=exp_data.get("description", ""), disabled=is_success)
+            
+            if not is_success:
+              col_submit, col_cancel = st.columns(2)
+              with col_submit:
+                submitted = st.form_submit_button("Confirm & Submit", type="primary", use_container_width=True)
+              with col_cancel:
+                canceled = st.form_submit_button("Cancel", use_container_width=True)
+            else:
+              submitted = False
+              canceled = False
+              st.form_submit_button("Submitted", disabled=True, use_container_width=True)
+              
+            if submitted:
+              resubmit_payload = {
+                  "amount": rev_amount,
+                  "currency": rev_currency,
+                  "vendor": rev_vendor,
+                  "category": rev_category,
+                  "date": rev_date.strftime("%Y-%m-%d"),
+                  "description": rev_desc,
+                  "submitter": st.session_state.email,
+                  "is_ui_resubmit": True,
+                  "original_amount": exp_data.get("original_amount"),
+                  "original_currency": exp_data.get("original_currency"),
+                  "exchange_rate": exp_data.get("exchange_rate"),
+                  "ocr_amount": float(exp_data.get("original_amount", exp_data.get("amount", 0.0))),
+                  "ocr_currency": exp_data.get("original_currency", exp_data.get("currency", "USD")),
+                  "ocr_vendor": exp_data.get("vendor", ""),
+                  "ocr_category": exp_data.get("category", ""),
+                  "ocr_date": exp_data.get("date", "")
+              }
+              
+              with st.spinner("Applying Acme Corp policies to updated data..."):
+                  st.session_state.from_review_submit = True
+                  import json
+                  message_dict = {
+                      "parts": [{"text": json.dumps({"expense": resubmit_payload})}],
+                      "role": "user",
+                  }
+                  
+                  # We reuse the existing session_id that is already in st.session_state 
+                  # so we don't clutter the backend with multiple sessions for one expense.
+                  
+                  try:
+                      events = run_agent(message_dict)
+                      process_events(events)
+                      
+                      st.session_state.review_is_paused = False
+                      st.session_state.from_review_submit = False
+                      st.session_state.review_submitted_success = True
+                      st.rerun()
+                  except Exception as e:
+                      st.error(f"The AI model is currently busy. Please try again: {e}")
+
+              
+            if canceled:
+              st.session_state.review_expense_data = None
+              st.session_state.review_session_to_track = None
+              st.session_state.demo_receipt_bytes = None
+              st.session_state.demo_receipt_name = None
+              st.session_state.uploader_key = st.session_state.get('uploader_key', 1) + 1
+              st.rerun()
+              
+          if is_success:
+              st.success("Expense processed successfully and routed to Admin if required!")
+              if st.button("Submit Another Receipt", type="primary"):
+                  st.session_state.review_expense_data = None
+                  st.session_state.review_session_to_track = None
+                  st.session_state.demo_receipt_bytes = None
+                  st.session_state.demo_receipt_name = None
+                  st.session_state.uploader_key = st.session_state.get('uploader_key', 1) + 1
+                  st.session_state.review_submitted_success = False
+                  st.rerun()
+              
+      else:
         if image_to_submit is not None:
+          st.image(image_to_submit, caption="Uploaded Receipt", width=500)
+  
+  
+  
+      if not st.session_state.get("review_expense_data"):
+        if st.button(
+          "Extract Details",
+          type="primary",
+          use_container_width=True,
+          key="submit_receipt",
+        ):
+          if image_to_submit is not None:
+            try:
+              # Bug #5: use async session creation consistently
+              session = asyncio.run(agent_runtime.async_create_session(user_id="streamlit_user"))
+              st.session_state.session_id = session["id"]
+              st.session_state.waiting_for_input = False
+              st.session_state.final_output = None
+              st.session_state.agent_messages = []
+              st.session_state.from_review_submit = False
+  
+              base64_image = base64.b64encode(image_to_submit).decode("utf-8")
+              st.session_state.submitted_receipt_image = base64_image
+              st.session_state.submitted_receipt_mime = mime_type
+  
+              payload_dict = {
+                "image_data": base64_image,
+                "mime_type": mime_type,
+                "submitter": st.session_state.email,
+              }
+              with st.spinner("Extracting details from receipt..."):
+                message_dict = {
+                  "parts": [{"text": json.dumps(payload_dict)}],
+                  "role": "user",
+                }
+                events = run_agent(message_dict)
+                process_events(events)
+                st.rerun()
+            except Exception as e:
+              st.error(f"An error occurred: {e}")
+          else:
+            # Bug #2: error is now inside the button block — only shown when the
+            # button is pressed without an image, never on passive page reruns.
+            st.error("Please upload an image or load the demo receipt first.")
+  
+  
+    with tab_form:
+      def reset_manual_form():
+        st.session_state.manual_amount = None
+        st.session_state.manual_currency = None
+        st.session_state.manual_category = None
+        st.session_state.manual_submitter = st.session_state.email
+        st.session_state.manual_date = date.today()
+        st.session_state.manual_description = ""
+        st.session_state.manual_submit_success = False
+        st.session_state.agent_messages = []
+  
+      if not st.session_state.get("manual_submitter") and st.session_state.email:
+        st.session_state.manual_submitter = st.session_state.email
+      if not st.session_state.get("manual_date"):
+        st.session_state.manual_date = date.today()
+  
+      if st.session_state.get("manual_submit_success"):
+        st.success("Expense processed successfully and routed to Admin if required!")
+        
+      with st.form("expense_form", clear_on_submit=False):
+        col_cur, col_a, col_conv, col_b = st.columns([1, 1, 1, 1.2])
+        with col_cur:
+          # Extensive list of global currencies
+          all_currencies = [
+              "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR",
+              "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AWG", "AZN", 
+              "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", 
+              "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CDF", "CLP", "COP", 
+              "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", 
+              "ERN", "ETB", "FJD", "FKP", "GEL", "GHS", "GIP", "GMD", "GNF", 
+              "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS", 
+              "IQD", "IRR", "ISK", "JMD", "JOD", "KES", "KGS", "KHR", "KMF", 
+              "KPW", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", 
+              "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", 
+              "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", 
+              "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", 
+              "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", 
+              "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLL", "SOS", "SRD", 
+              "SSP", "STN", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", 
+              "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", 
+              "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"
+          ]
+          exp_currency = st.selectbox(
+            "Currency",
+            all_currencies,
+            index=None,
+            placeholder="Select Currency...",
+            key="manual_currency",
+          )
+        with col_a:
+          exp_amount = st.number_input(
+            "Amount",
+            min_value=0.01,
+            step=0.01,
+            format="%.2f",
+            value=None,
+            placeholder="0.00",
+            key="manual_amount",
+          )
+        # Calculate converted USD value
+        usd_val = None
+        rate_str = ""
+        if exp_amount and exp_currency:
+          if exp_currency != "USD":
+            from expense_agent.agent import convert_to_usd
+            usd_val, rate, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
+            rate_str = f"*(Converted to USD using live rate: 1 {exp_currency.upper()} = ${rate} USD)*"
+          else:
+            usd_val = float(exp_amount)
+  
+        with col_conv:
+          st.number_input(
+            "Amount (USD)",
+            value=usd_val,
+            disabled=True,
+            format="%.2f",
+            placeholder="0.00",
+          )
+  
+        with col_b:
+          exp_category = st.selectbox(
+            "Category",
+            [
+              "Meals",
+              "Travel",
+              "Equipment",
+              "Office Supplies",
+              "Software",
+              "Other",
+            ],
+            index=None,
+            placeholder="Select Category...",
+            key="manual_category",
+          )
+  
+        if rate_str:
+          st.caption(rate_str)
+  
+        col_c, col_d = st.columns(2)
+        with col_c:
+          exp_submitter = st.text_input(
+            "Submitter Email", key="manual_submitter"
+          )
+        with col_d:
+          exp_date = st.date_input("Expense Date", key="manual_date")
+  
+        exp_description = st.text_area(
+          "Purpose / Justification",
+          placeholder="Describe the purpose of this expense…",
+          height=100,
+          key="manual_description",
+        )
+  
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+          submitted = st.form_submit_button(
+            "Submit Expense",
+            type="primary",
+            use_container_width=True,
+          )
+        with col_btn2:
+          cleared = st.form_submit_button(
+            "Clear Form",
+            use_container_width=True,
+            on_click=reset_manual_form,
+          )
+  
+      if submitted:
+        if not exp_amount:
+          st.error("Please enter a valid amount.")
+        elif not exp_currency:
+          st.error("Please select a currency.")
+        elif not exp_category:
+          st.error("Please select a category.")
+        elif not exp_submitter.strip():
+          st.error("Please enter the submitter email.")
+        elif not exp_description.strip():
+          st.error("Please provide a description for the expense.")
+        else:
           try:
-            # Bug #5: use async session creation consistently
             session = asyncio.run(agent_runtime.async_create_session(user_id="streamlit_user"))
             st.session_state.session_id = session["id"]
             st.session_state.waiting_for_input = False
             st.session_state.final_output = None
             st.session_state.agent_messages = []
+            st.session_state.submitted_receipt_image = None
+            st.session_state.review_expense_data = None
             st.session_state.from_review_submit = False
-
-            base64_image = base64.b64encode(image_to_submit).decode("utf-8")
-            st.session_state.submitted_receipt_image = base64_image
-            st.session_state.submitted_receipt_mime = mime_type
-
-            payload_dict = {
-              "image_data": base64_image,
-              "mime_type": mime_type,
-              "submitter": st.session_state.email,
+            st.session_state.review_submitted_success = False
+            st.session_state.manual_submit_success = False
+  
+            data = {
+              "amount": float(exp_amount),
+              "currency": exp_currency,
+              "submitter": exp_submitter,
+              "category": exp_category,
+              "description": exp_description,
+              "date": str(exp_date),
+              "is_manual_submit": True,
             }
-            with st.spinner("Extracting details from receipt..."):
+            st.session_state.raw_json = json.dumps(data, indent=2)
+            
+            with st.spinner("Processing expense…"):
               message_dict = {
-                "parts": [{"text": json.dumps(payload_dict)}],
+                "parts": [{"text": json.dumps(data)}],
                 "role": "user",
               }
               events = run_agent(message_dict)
               process_events(events)
+              st.session_state.manual_submit_success = True
               st.rerun()
           except Exception as e:
             st.error(f"An error occurred: {e}")
-        else:
-          # Bug #2: error is now inside the button block — only shown when the
-          # button is pressed without an image, never on passive page reruns.
-          st.error("Please upload an image or load the demo receipt first.")
-
-
-  with tab_form:
-    def reset_manual_form():
-      st.session_state.manual_amount = None
-      st.session_state.manual_currency = None
-      st.session_state.manual_category = None
-      st.session_state.manual_submitter = st.session_state.email
-      st.session_state.manual_date = date.today()
-      st.session_state.manual_description = ""
-      st.session_state.manual_submit_success = False
-      st.session_state.agent_messages = []
-
-    if not st.session_state.get("manual_submitter") and st.session_state.email:
-      st.session_state.manual_submitter = st.session_state.email
-    if not st.session_state.get("manual_date"):
-      st.session_state.manual_date = date.today()
-
-    if st.session_state.get("manual_submit_success"):
-      st.success("Expense processed successfully and routed to Admin if required!")
-      
-    with st.form("expense_form", clear_on_submit=False):
-      col_cur, col_a, col_conv, col_b = st.columns([1, 1, 1, 1.2])
-      with col_cur:
-        # Extensive list of global currencies
-        all_currencies = [
-            "USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY", "INR",
-            "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AWG", "AZN", 
-            "BAM", "BBD", "BDT", "BGN", "BHD", "BIF", "BMD", "BND", "BOB", 
-            "BRL", "BSD", "BTN", "BWP", "BYN", "BZD", "CDF", "CLP", "COP", 
-            "CRC", "CUP", "CVE", "CZK", "DJF", "DKK", "DOP", "DZD", "EGP", 
-            "ERN", "ETB", "FJD", "FKP", "GEL", "GHS", "GIP", "GMD", "GNF", 
-            "GTQ", "GYD", "HKD", "HNL", "HRK", "HTG", "HUF", "IDR", "ILS", 
-            "IQD", "IRR", "ISK", "JMD", "JOD", "KES", "KGS", "KHR", "KMF", 
-            "KPW", "KRW", "KWD", "KYD", "KZT", "LAK", "LBP", "LKR", "LRD", 
-            "LSL", "LYD", "MAD", "MDL", "MGA", "MKD", "MMK", "MNT", "MOP", 
-            "MRU", "MUR", "MVR", "MWK", "MXN", "MYR", "MZN", "NAD", "NGN", 
-            "NIO", "NOK", "NPR", "NZD", "OMR", "PAB", "PEN", "PGK", "PHP", 
-            "PKR", "PLN", "PYG", "QAR", "RON", "RSD", "RUB", "RWF", "SAR", 
-            "SBD", "SCR", "SDG", "SEK", "SGD", "SHP", "SLL", "SOS", "SRD", 
-            "SSP", "STN", "SYP", "SZL", "THB", "TJS", "TMT", "TND", "TOP", 
-            "TRY", "TTD", "TWD", "TZS", "UAH", "UGX", "UYU", "UZS", "VES", 
-            "VND", "VUV", "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL"
-        ]
-        exp_currency = st.selectbox(
-          "Currency",
-          all_currencies,
-          index=None,
-          placeholder="Select Currency...",
-          key="manual_currency",
-        )
-      with col_a:
-        exp_amount = st.number_input(
-          "Amount",
-          min_value=0.01,
-          step=0.01,
-          format="%.2f",
-          value=None,
-          placeholder="0.00",
-          key="manual_amount",
-        )
-      # Calculate converted USD value
-      usd_val = None
-      rate_str = ""
-      if exp_amount and exp_currency:
-        if exp_currency != "USD":
-          from expense_agent.agent import convert_to_usd
-          usd_val, rate, _ = convert_to_usd(float(exp_amount), exp_currency, str(date.today()))
-          rate_str = f"*(Converted to USD using live rate: 1 {exp_currency.upper()} = ${rate} USD)*"
-        else:
-          usd_val = float(exp_amount)
-
-      with col_conv:
-        st.number_input(
-          "Amount (USD)",
-          value=usd_val,
-          disabled=True,
-          format="%.2f",
-          placeholder="0.00",
-        )
-
-      with col_b:
-        exp_category = st.selectbox(
-          "Category",
-          [
-            "Meals",
-            "Travel",
-            "Equipment",
-            "Office Supplies",
-            "Software",
-            "Other",
-          ],
-          index=None,
-          placeholder="Select Category...",
-          key="manual_category",
-        )
-
-      if rate_str:
-        st.caption(rate_str)
-
-      col_c, col_d = st.columns(2)
-      with col_c:
-        exp_submitter = st.text_input(
-          "Submitter Email", key="manual_submitter"
-        )
-      with col_d:
-        exp_date = st.date_input("Expense Date", key="manual_date")
-
-      exp_description = st.text_area(
-        "Purpose / Justification",
-        placeholder="Describe the purpose of this expense…",
-        height=100,
-        key="manual_description",
-      )
-
-      col_btn1, col_btn2 = st.columns(2)
-      with col_btn1:
-        submitted = st.form_submit_button(
-          "Submit Expense",
-          type="primary",
-          use_container_width=True,
-        )
-      with col_btn2:
-        cleared = st.form_submit_button(
-          "Clear Form",
-          use_container_width=True,
-          on_click=reset_manual_form,
-        )
-
-    if submitted:
-      if not exp_amount:
-        st.error("Please enter a valid amount.")
-      elif not exp_currency:
-        st.error("Please select a currency.")
-      elif not exp_category:
-        st.error("Please select a category.")
-      elif not exp_submitter.strip():
-        st.error("Please enter the submitter email.")
-      elif not exp_description.strip():
-        st.error("Please provide a description for the expense.")
-      else:
-        try:
-          session = asyncio.run(agent_runtime.async_create_session(user_id="streamlit_user"))
-          st.session_state.session_id = session["id"]
-          st.session_state.waiting_for_input = False
-          st.session_state.final_output = None
-          st.session_state.agent_messages = []
-          st.session_state.submitted_receipt_image = None
-          st.session_state.review_expense_data = None
-          st.session_state.from_review_submit = False
-          st.session_state.review_submitted_success = False
-          st.session_state.manual_submit_success = False
-
-          data = {
-            "amount": float(exp_amount),
-            "currency": exp_currency,
-            "submitter": exp_submitter,
-            "category": exp_category,
-            "description": exp_description,
-            "date": str(exp_date),
-            "is_manual_submit": True,
-          }
-          st.session_state.raw_json = json.dumps(data, indent=2)
-          
-          with st.spinner("Processing expense…"):
-            message_dict = {
-              "parts": [{"text": json.dumps(data)}],
-              "role": "user",
-            }
-            events = run_agent(message_dict)
-            process_events(events)
-            st.rerun()
-        except Exception as e:
-          st.error(f"An error occurred: {e}")
-
-
-
-  # ── Progress / Final output ────────────────────
-  if st.session_state.agent_messages:
-    with st.expander(" Submission Progress", expanded=True):
-      for msg in st.session_state.agent_messages:
-        st.markdown(msg)
-
-  # ── My Expenses Table ────────────────────────────────────
+  
+  
+  
+    # ── Progress / Final output ────────────────────
+  
+    # ── My Expenses Table ────────────────────────────────────
   @st.fragment(run_every="5s")
   def render_employee_expenses():
     my_pending = [r for r in get_all_pending_approvals() if r.get("submitter_email") == st.session_state.email]
@@ -2240,22 +1903,22 @@ if st.session_state.role == "Employee":
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
           
-          # Extract original conversion note if present in description
           desc = exp.get('description', '—')
           amount_display = f"${exp.get('amount',0):.2f}"
-          import re
-          match = re.search(r'\[Original: ([\d.]+) ([A-Z]+) converted at', desc)
-          if match:
-              orig_amt = match.group(1)
-              orig_cur = match.group(2)
-              amount_display = f"{orig_amt} {orig_cur}<br><small style='color:gray'>≈ ${exp.get('amount',0):.2f} USD</small>"
-              desc = re.sub(r' \[Original: .*?\]', '', desc)
+          
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}"
+          else:
+              original_display = "—"
 
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
             <td><strong>{amount_display}</strong></td>
+            <td>{original_display}</td>
             <td>{_esc(desc[:60])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
@@ -2267,6 +1930,7 @@ if st.session_state.role == "Employee":
       <th>Date</th>
       <th>Category</th>
       <th>Amount</th>
+      <th>Original</th>
       <th>Description</th>
       <th>Status</th>
     </tr></thead>
@@ -2276,27 +1940,169 @@ if st.session_state.role == "Employee":
         )
       else:
         st.info("No expenses match the selected filters.")
+    else:
+      st.markdown("""
+        <div style="text-align: center; padding: 4rem; color: #6b7280; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📫</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">No Past Expenses!</h3>
+            <p>You haven't submitted any expenses yet. Go to the Submit Expense tab to get started.</p>
+        </div>
+      """, unsafe_allow_html=True)
 
-  render_employee_expenses()
+  if st.session_state.active_page == "My Inbox":
+    st.markdown('<div class="section-title">My Inbox</div>', unsafe_allow_html=True)
+    inbox_messages = get_employee_inbox(st.session_state.email)
+    mark_inbox_read(st.session_state.email)
+    
+    if not inbox_messages:
+      st.markdown("""
+        <div style="text-align: center; padding: 4rem; color: #6b7280; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📭</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Empty</h3>
+            <p>You have no new notifications.</p>
+        </div>
+      """, unsafe_allow_html=True)
+    else:
+      for msg in inbox_messages:
+          msg_date = msg.get("date", "Unknown Date")
+          subject = msg.get("subject", "Notification")
+          body = msg.get("body", "")
+          with st.expander(f"**{_esc(subject)}**  |  *{_esc(msg_date)}*"):
+              st.markdown(body)
+
+  if st.session_state.active_page == "My History":
+    render_employee_expenses()
 
 
 # ╔═══════════════════════════════════════════════════════════╗
 # ║ ADMIN DASHBOARD                     ║
 # ╚═══════════════════════════════════════════════════════════╝
 elif st.session_state.role == "Admin":
-  @st.fragment(run_every="5s")
+  @st.dialog("Receipt Preview")
+  def show_receipt_dialog(img_data):
+      st.image(img_data, use_container_width=True)
+
+  @st.dialog("Confirm Rejection")
+  def reject_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
+      st.warning("Are you sure you want to reject this expense?")
+      rejection_reason = st.text_input("Rejection Reason (required):", key=f"rej_reason_{item_db_id}")
+      if st.button("Confirm Reject", type="primary", key=f"confirm_reject_btn_{item_db_id}"):
+          if not rejection_reason.strip():
+              st.toast("A rejection reason is mandatory.")
+          else:
+              with st.spinner("Rejecting..."):
+                  payload = {
+                    "role": "tool",
+                    "parts": [{
+                      "function_response": {
+                        "id": item_interrupt_id,
+                        "name": "adk_request_input",
+                        "response": {"output": f"Reject: {rejection_reason}"}
+                      }
+                    }]
+                  }
+                  try:
+                    events = run_agent(payload, specific_session_id=item_session_id)
+                    process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
+                    delete_pending_approval(item_db_id)
+                    st.toast("Expense Rejected!")
+                    st.rerun()
+                  except Exception as e:
+                    if "Session not found" in str(e):
+                      st.toast("Session expired. Manually saving rejection.")
+                      fallback_exp = {
+                        "amount": float(item_details.get("amount", 0.0)),
+                        "submitter": item_submitter_str,
+                        "category": item_category,
+                        "description": item_details.get("description", "—") + f" [Comment: {rejection_reason}]",
+                        "date": item_date
+                      }
+                      save_expense(fallback_exp, "Rejected")
+                      delete_pending_approval(item_db_id)
+                      st.rerun()
+                    else:
+                      st.error(f"Error resuming workflow: {e}")
+
+  @st.dialog("Confirm Approval")
+  def approve_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
+      st.info("Are you sure you want to approve this expense?")
+      if st.button("Confirm Approve", type="primary", key=f"confirm_approve_btn_{item_db_id}"):
+          with st.spinner("Approving..."):
+              payload = {
+                "role": "tool",
+                "parts": [{
+                  "function_response": {
+                    "id": item_interrupt_id,
+                    "name": "adk_request_input",
+                    "response": {"output": "Approve"}
+                  }
+                }]
+              }
+              try:
+                events = run_agent(payload, specific_session_id=item_session_id)
+                process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
+                delete_pending_approval(item_db_id)
+                st.toast("Expense Approved!")
+                st.rerun()
+              except Exception as e:
+                if "Session not found" in str(e):
+                  st.toast("Session expired. Manually saving approval.")
+                  fallback_exp = {
+                    "amount": float(item_details.get("amount", 0.0)),
+                    "submitter": item_submitter_str,
+                    "category": item_category,
+                    "description": item_details.get("description", "—"),
+                    "date": item_date
+                  }
+                  save_expense(fallback_exp, "Approved")
+                  delete_pending_approval(item_db_id)
+                  st.rerun()
+                else:
+                  st.error(f"Error resuming workflow: {e}")
+
   def render_admin_dashboard():
     # ── All Expenses Table ───────────────────────────────────
     all_expenses = get_all_expenses()
     pending_records = get_all_pending_approvals()
     pending_count = len(pending_records)
     total_label = f"Pending Approval Requests ({pending_count})" if pending_count else "All Expenses"
+
+    if all_expenses:
+        import pandas as pd
+        df = pd.DataFrame(all_expenses)
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+        
+        approved_amt = df[df['status'] == 'Approved']['amount'].sum()
+        rejected_amt = df[df['status'] == 'Rejected']['amount'].sum()
+        
+        st.markdown('<div class="section-title">Dashboard Overview</div>', unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Approved", f"${approved_amt:,.2f}")
+        col2.metric("Total Rejected", f"${rejected_amt:,.2f}")
+        col3.metric("Pending Requests", pending_count)
+        
+        cat_df = df.groupby('category')['amount'].sum().reset_index()
+        if not cat_df.empty:
+            st.markdown('<div style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: #374151;">Expenses by Category</div>', unsafe_allow_html=True)
+            st.bar_chart(cat_df, x="category", y="amount", use_container_width=True)
+            
+        st.markdown("---")
   
     st.markdown(
-      f'<div class="section-title">{total_label}</div>',
+      f'<div class="section-title" id="pending_approvals">{total_label}</div>',
       unsafe_allow_html=True,
     )
+    
+    if st.session_state.get("admin_scroll") == "pending_approvals":
+        import streamlit.components.v1 as components
+        components.html(
+            "<script>window.parent.document.getElementById('pending_approvals').scrollIntoView({behavior: 'smooth'});</script>",
+            height=0
+        )
+        st.session_state.admin_scroll = None
   
+
+
     # ── Pending expense detail card ──────────────────────────
     if pending_records:
       for record in pending_records:
@@ -2312,6 +2118,7 @@ elif st.session_state.role == "Admin":
         amount_str = details.get("amount", "0.00")
         description_str = details.get("description", "—")
         risk_str = details.get("risk", "N/A")
+        
         has_security = details.get("security_flag", False)
         has_injection = details.get("injection", False)
         pii_info = details.get("pii", "")
@@ -2321,6 +2128,16 @@ elif st.session_state.role == "Admin":
           exp_data = json.loads(raw_json_str)
         except Exception:
           exp_data = {}
+          
+        amount_display = f"${_esc(amount_str)}"
+        orig_amt = exp_data.get("original_amount")
+        orig_cur = exp_data.get("original_currency")
+        if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+            rate = exp_data.get("exchange_rate")
+            rate_str = f" <small style='color:gray;'>(Rate: 1 {_esc(str(orig_cur))} = ${_esc(str(rate))} USD)</small>" if rate else ""
+            original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}{rate_str}"
+        else:
+            original_display = "—"
           
         exp_date = exp_data.get("date", date.today().strftime('%d %b %Y'))
         exp_category = exp_data.get("category", "—")
@@ -2336,7 +2153,7 @@ elif st.session_state.role == "Admin":
           f"""<table class="expense-table">
   <thead><tr>
     <th>Expense ID</th><th>Employee</th><th>Date</th>
-    <th>Amount</th><th>Category</th><th>Status</th>
+    <th>Amount</th><th>Original</th><th>Category</th><th>Status</th>
   </tr></thead>
   <tbody>
   <tr class="row-selected">
@@ -2351,7 +2168,8 @@ elif st.session_state.role == "Admin":
       </div>
     </td>
     <td>{_esc(exp_date)}</td>
-    <td><strong>${_esc(amount_str)}</strong></td>
+    <td><strong>{amount_display}</strong></td>
+    <td>{original_display}</td>
     <td>{_esc(exp_category)}</td>
     <td><span class="status-badge status-awaiting">Awaiting Approval</span></td>
   </tr>
@@ -2363,7 +2181,7 @@ elif st.session_state.role == "Admin":
         # Security badges HTML
         flags_html = ""
         if has_security:
-          flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">⚠️ Security Event</span>'
+          flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">Warning: Security Event</span>'
         if has_injection:
           flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">🚨 Prompt Injection</span>'
         if pii_info:
@@ -2382,7 +2200,7 @@ elif st.session_state.role == "Admin":
     <div class="detail-label">Date:</div>
     <div class="detail-value">{_esc(exp_date)}</div>
     <div class="detail-label">Amount:</div>
-    <div class="detail-value"><strong>${_esc(amount_str)}</strong></div>
+    <div class="detail-value"><strong>{amount_display}</strong></div>
     <div class="detail-label">Category:</div>
     <div class="detail-value">{_esc(exp_category)} (Threshold: ${threshold:.2f})</div>
     <div class="detail-label">Purpose:</div>
@@ -2402,107 +2220,53 @@ elif st.session_state.role == "Admin":
   
         # ── Receipt image preview ────────────────────────────
         if receipt_bytes:
-          with st.expander(" Invoice Attachment — View Receipt", expanded=True):
+          if st.button("View Full Receipt", key=f"btn_view_{db_id}"):
             try:
               img_bytes = base64.b64decode(receipt_bytes)
-              st.image(
-                img_bytes,
-                caption="Submitted Receipt / Invoice",
-                width=500,
-              )
+              show_receipt_dialog(img_bytes)
             except Exception:
-              st.info("Unable to render receipt image.")
+              st.error("Unable to render receipt image.")
   
         # ── Approve / Reject ─────────────────────────────────
         st.markdown("---")
-        rejection_reason = st.text_input(
-          "Add Comment (required for rejection):",
-          placeholder="e.g., Missing receipt, Out of budget…",
-          key=f"rej_reason_{db_id}"
-        )
-  
+        
         col1, col2 = st.columns(2)
         with col1:
           if st.button("Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
-            if not rejection_reason.strip():
-              st.error("A rejection reason is mandatory.")
-            else:
-              with st.spinner("Resuming workflow to reject..."):
-                payload = {
-                  "role": "tool",
-                  "parts": [{
-                    "function_response": {
-                      "id": interrupt_id,
-                      "name": "adk_request_input",
-                      "response": {"output": f"Reject: {rejection_reason}"}
-                    }
-                  }]
-                }
-                try:
-                  events = run_agent(payload, specific_session_id=session_id)
-                  process_events(events, run_session_id=session_id, submitter_email=submitter_email)
-                  delete_pending_approval(db_id)
-                  st.rerun()
-                except Exception as e:
-                  if "Session not found" in str(e):
-                    st.toast("Session expired (server restarted). Manually saving rejection.", icon="ℹ️")
-                    fallback_exp = {
-                      "amount": float(details.get("amount", 0.0)),
-                      "submitter": submitter_str,
-                      "category": exp_category,
-                      "description": details.get("description", "—") + f" [Comment: {rejection_reason}]",
-                      "date": exp_date
-                    }
-                    save_expense(fallback_exp, "Rejected")
-                    delete_pending_approval(db_id)
-                    st.rerun()
-                  else:
-                    st.error(f"Error resuming workflow: {e}")
+            reject_dialog(db_id, interrupt_id, session_id, submitter_email, details, exp_category, exp_date, submitter_str)
         with col2:
           if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
-            with st.spinner("Resuming workflow to approve..."):
-              payload = {
-                "role": "tool",
-                "parts": [{
-                  "function_response": {
-                    "id": interrupt_id,
-                    "name": "adk_request_input",
-                    "response": {"output": "Approve"}
-                  }
-                }]
-              }
-              try:
-                events = run_agent(payload, specific_session_id=session_id)
-                process_events(events, run_session_id=session_id, submitter_email=submitter_email)
-                delete_pending_approval(db_id)
-                st.rerun()
-              except Exception as e:
-                if "Session not found" in str(e):
-                  st.toast("Session expired (server restarted). Manually saving approval.", icon="ℹ️")
-                  fallback_exp = {
-                    "amount": float(details.get("amount", 0.0)),
-                    "submitter": submitter_str,
-                    "category": exp_category,
-                    "description": details.get("description", "—"),
-                    "date": exp_date
-                  }
-                  save_expense(fallback_exp, "Approved")
-                  delete_pending_approval(db_id)
-                  st.rerun()
-                else:
-                  st.error(f"Error resuming workflow: {e}")
+            approve_dialog(db_id, interrupt_id, session_id, submitter_email, details, exp_category, exp_date, submitter_str)
   
     else:
       # ── No pending — show last result + all expenses ─────
+      st.markdown("""<div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-bottom: 2rem;">
+    <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Zero!</h3>
+    <p>All expense requests have been processed.</p>
+</div>""", unsafe_allow_html=True)
+
       if st.session_state.final_output:
         out = st.session_state.final_output
         if isinstance(out, dict):
           exp = out.get("expense", {})
           decision = out.get("decision", "N/A")
           reason = out.get("reason", "")
+          email_mock = out.get("notification_email", "")
           status_cls = (
             "status-approved" if decision == "Approved" else ("status-auto-approved" if decision == "Auto-Approved" else "status-rejected")
           )
+          
+          email_html = ""
+            
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              rate = exp.get("exchange_rate")
+              rate_str = f" <small style='color:gray;'>(Rate: 1 {_esc(str(orig_cur))} = ${_esc(str(rate))} USD)</small>" if rate else ""
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}{rate_str}"
+          else:
+              original_display = "—"
+          
           st.markdown(
             f"""<div class="detail-card">
   <div class="detail-header">
@@ -2521,6 +2285,7 @@ elif st.session_state.role == "Admin":
     <div class="detail-label">Reason:</div>
     <div class="detail-value">{_esc(reason)}</div>
   </div>
+  {email_html}
 </div>""",
             unsafe_allow_html=True,
           )
@@ -2612,6 +2377,17 @@ elif st.session_state.role == "Admin":
           emp_name = _display_name(exp.get("submitter", ""))
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
+          
+          desc = exp.get('description','—')
+          amount_display = f"${exp.get('amount',0):.2f}"
+          
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}"
+          else:
+              original_display = "—"
+              
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>
@@ -2624,8 +2400,9 @@ elif st.session_state.role == "Admin":
             </td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
-            <td><strong>${exp.get('amount',0):.2f}</strong></td>
-            <td>{_esc(exp.get('description','—')[:40])}</td>
+            <td><strong>{amount_display}</strong></td>
+            <td>{original_display}</td>
+            <td>{_esc(desc[:40])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
 
@@ -2637,6 +2414,7 @@ elif st.session_state.role == "Admin":
               <th>Date</th>
               <th>Category</th>
               <th>Amount</th>
+              <th>Original</th>
               <th>Description</th>
               <th>Status</th>
             </tr></thead>
