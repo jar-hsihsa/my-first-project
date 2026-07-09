@@ -31,17 +31,14 @@ def _esc_description(value: str) -> str:
   """HTML-escape a description string, rendering [Original: ...] and [Warning: ...] notes in styled badges."""
   escaped = html_escape(str(value)) if value else "—"
   import re
-  pattern = r'(\[Original:[^\]]+\])'
-  def replacer(match):
-    note = match.group(1)
-    return f'<strong class="conversion-badge">{note}</strong>'
+  pattern = r'\s*\[Original:[^\]]+\]\s*'
   
   pattern_warning = r'(\[Warning:[^\]]+\])'
   def warning_replacer(match):
     note = match.group(1)
     return f'<strong class="conversion-warning-badge">{note}</strong>'
     
-  formatted = re.sub(pattern, replacer, escaped)
+  formatted = re.sub(pattern, ' ', escaped).strip()
   formatted = re.sub(pattern_warning, warning_replacer, formatted)
   return formatted
 

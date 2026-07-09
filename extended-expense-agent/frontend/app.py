@@ -19,7 +19,8 @@ from expense_agent.agent import init_db
 
 from frontend.database import (
     _db_path, get_employee_expenses, get_all_expenses, save_expense, 
-    save_pending_approval, get_pending_count, get_all_pending_approvals, delete_pending_approval
+    save_pending_approval, get_pending_count, get_all_pending_approvals, delete_pending_approval,
+    get_employee_inbox, save_inbox_message, mark_inbox_read
 )
 from frontend.auth import (
     create_ui_session, verify_ui_session, delete_ui_session, verify_credentials
@@ -209,7 +210,7 @@ section[data-testid="stSidebar"] .stButton > button:hover {
   margin-bottom: 0.25rem;
   border-bottom: 1px solid #E2E8F0;
 }
-.top-header h1 {
+.top-header .portal-title {
   font-size: 1.4rem;
   font-weight: 700;
   color: #1E293B;
@@ -618,7 +619,7 @@ body[data-theme="dark"] .excel-filter {
   color: #f8fafc !important;
   border-color: #334155 !important;
 }
-body[data-theme="dark"] .top-header h1 {
+body[data-theme="dark"] .top-header .portal-title {
   color: #f8fafc !important;
 }
 body[data-theme="dark"] .top-header-right {
@@ -1054,12 +1055,12 @@ if not st.session_state.logged_in:
                 # Invalid role — clear stale token
                 delete_ui_session(session_token)
                 st.query_params.clear()
-                st.info("⚠️ Session expired or invalid. Please sign in again.")
+                st.info("Warning: Session expired or invalid. Please sign in again.")
         else:
             # Token not found or expired
             st.query_params.clear()
             # Bug #9: Show clear message so users know why auto-login didn't work
-            st.info("⚠️ Session expired. Please sign in again.")
+            st.info("Warning: Session expired. Please sign in again.")
     else:
         # Legacy cleanup: remove old-style email/role/token params if present
         if any(k in st.query_params for k in ("email", "role", "token")):
@@ -1192,24 +1193,13 @@ if not st.session_state.logged_in:
       
       elif st.session_state.selected_login_role == "Employee":
         employee_names = [f"Employee {i}" for i in [1, 2, 3, 4, 5, 6, 7]]  # Bug #19: Added Employee 6
-        selected_employee = st.selectbox("Select Employee", options=employee_names)
-        password = st.text_input("Password", type="password", value="")
-        
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
-            st.session_state.selected_login_role = None
-            st.session_state.emp_prev_state = (None, "")
-            st.rerun()
-        with col_b2:
-          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
-          
-        current_state = (selected_employee, password)
-        previous_state = st.session_state.get("emp_prev_state", (None, ""))
-        enter_pressed = (password != "") and (current_state != previous_state)
-        
-        if signin_clicked or enter_pressed:
-          st.session_state.emp_prev_state = current_state
+            
+        with st.form("employee_login_form"):
+            selected_employee = st.selectbox("Select Employee", options=employee_names)
+            password = st.text_input("Password", type="password", value="")
+            signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+            
+        if signin_clicked:
           emp_num = selected_employee.split(" ")[1]
           email = f"employee{emp_num}@acmecorp.com"
           if verify_credentials(email, password):
@@ -1229,24 +1219,12 @@ if not st.session_state.logged_in:
             st.error("Invalid password. Please try again.")
             
       elif st.session_state.selected_login_role == "Admin":
-        email = st.text_input("Corporate Email", value="admin@acmecorp.com")
-        password = st.text_input("Password", type="password", value="")
+        with st.form("admin_login_form"):
+            email = st.text_input("Corporate Email", value="admin@acmecorp.com")
+            password = st.text_input("Password", type="password", value="")
+            signin_clicked = st.form_submit_button("Sign In", type="primary", use_container_width=True)
 
-        col_b1, col_b2 = st.columns([1, 2])
-        with col_b1:
-          if st.button(" Back", use_container_width=True):
-            st.session_state.selected_login_role = None
-            st.session_state.admin_prev_state = (None, "")
-            st.rerun()
-        with col_b2:
-          signin_clicked = st.button("Sign In", type="primary", use_container_width=True)
-
-        current_state = (email, password)
-        previous_state = st.session_state.get("admin_prev_state", (None, ""))
-        enter_pressed = (password != "") and (current_state != previous_state)
-
-        if signin_clicked or enter_pressed:
-          st.session_state.admin_prev_state = current_state
+        if signin_clicked:
           if email.strip():
             if verify_credentials(email, password):
               st.session_state.logged_in = True
@@ -1287,14 +1265,23 @@ with st.sidebar:
   if st.session_state.role == "Admin":
     # Bug #14: Use COUNT(*) query instead of fetching all rows just for the count
     pending_count = get_pending_count()
-    btn_label = f"📁 Pending Approvals ({pending_count})" if pending_count else "📁 Pending Approvals"
-    st.button(btn_label, use_container_width=True, type="primary")
+    btn_label = f"Pending Approvals ({pending_count})" if pending_count else "Pending Approvals"
+    if st.button(btn_label, use_container_width=True, type="primary"):
+        st.session_state.admin_scroll = "pending_approvals"
+        st.rerun()
   else:
-    if st.button("📝 Submit Expense", use_container_width=True, type="primary" if st.session_state.active_page == "Submit Expense" else "secondary"):
+    if st.button("Submit Expense", use_container_width=True, type="primary" if st.session_state.active_page == "Submit Expense" else "secondary"):
         st.session_state.active_page = "Submit Expense"
         st.rerun()
-    if st.button("🕒 My History", use_container_width=True, type="primary" if st.session_state.active_page == "My History" else "secondary"):
+    if st.button("My History", use_container_width=True, type="primary" if st.session_state.active_page == "My History" else "secondary"):
         st.session_state.active_page = "My History"
+        st.rerun()
+    
+    inbox_list = get_employee_inbox(st.session_state.email)
+    unread_count = sum(1 for m in inbox_list if not m.get("is_read", True))
+    inbox_label = f"My Inbox ({unread_count})" if unread_count > 0 else "My Inbox"
+    if st.button(inbox_label, use_container_width=True, type="primary" if st.session_state.active_page == "My Inbox" else "secondary"):
+        st.session_state.active_page = "My Inbox"
         st.rerun()
 
   st.markdown("---")
@@ -1352,7 +1339,7 @@ role_label = st.session_state.role
 
 st.markdown(
   f"""<div class="top-header">
-    <h1>Expense Approval Portal</h1>
+    <div class="portal-title">Expense Approval Portal</div>
     <div class="top-header-right">
       <span>Welcome, {_esc(display)} ({_esc(role_label)})</span>
       <span class="user-avatar">{_esc(initials)}</span>
@@ -1374,7 +1361,7 @@ if st.session_state.role == "Employee":
       '<div class="section-title">Submit New Expense</div>',
       unsafe_allow_html=True,
     )
-  
+    
     tab_receipt, tab_form = st.tabs(["Upload Receipt", "Fill Expense Form"])
   
     with tab_receipt:
@@ -1572,7 +1559,7 @@ if st.session_state.role == "Employee":
               st.rerun()
               
           if is_success:
-              st.toast("Expense processed successfully and routed to Admin if required!", icon="✅")
+              st.success("Expense processed successfully and routed to Admin if required!")
               if st.button("Submit Another Receipt", type="primary"):
                   st.session_state.review_expense_data = None
                   st.session_state.review_session_to_track = None
@@ -1647,7 +1634,7 @@ if st.session_state.role == "Employee":
         st.session_state.manual_date = date.today()
   
       if st.session_state.get("manual_submit_success"):
-        st.toast("Expense processed successfully and routed to Admin if required!", icon="✅")
+        st.success("Expense processed successfully and routed to Admin if required!")
         
       with st.form("expense_form", clear_on_submit=False):
         col_cur, col_a, col_conv, col_b = st.columns([1, 1, 1, 1.2])
@@ -1799,6 +1786,7 @@ if st.session_state.role == "Employee":
               }
               events = run_agent(message_dict)
               process_events(events)
+              st.session_state.manual_submit_success = True
               st.rerun()
           except Exception as e:
             st.error(f"An error occurred: {e}")
@@ -1806,10 +1794,6 @@ if st.session_state.role == "Employee":
   
   
     # ── Progress / Final output ────────────────────
-    if st.session_state.agent_messages:
-      with st.expander(" Submission Progress", expanded=True):
-        for msg in st.session_state.agent_messages:
-          st.markdown(msg)
   
     # ── My Expenses Table ────────────────────────────────────
   @st.fragment(run_every="5s")
@@ -1919,22 +1903,22 @@ if st.session_state.role == "Employee":
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
           
-          # Extract original conversion note if present in description
           desc = exp.get('description', '—')
           amount_display = f"${exp.get('amount',0):.2f}"
-          import re
-          match = re.search(r'\[Original: ([\d.]+) ([A-Z]+) converted at', desc)
-          if match:
-              orig_amt = match.group(1)
-              orig_cur = match.group(2)
-              amount_display = f"{orig_amt} {orig_cur}<br><small style='color:gray'>≈ ${exp.get('amount',0):.2f} USD</small>"
-              desc = re.sub(r' \[Original: .*?\]', '', desc)
+          
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}"
+          else:
+              original_display = "—"
 
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
             <td><strong>{amount_display}</strong></td>
+            <td>{original_display}</td>
             <td>{_esc(desc[:60])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
@@ -1946,6 +1930,7 @@ if st.session_state.role == "Employee":
       <th>Date</th>
       <th>Category</th>
       <th>Amount</th>
+      <th>Original</th>
       <th>Description</th>
       <th>Status</th>
     </tr></thead>
@@ -1955,6 +1940,35 @@ if st.session_state.role == "Employee":
         )
       else:
         st.info("No expenses match the selected filters.")
+    else:
+      st.markdown("""
+        <div style="text-align: center; padding: 4rem; color: #6b7280; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📫</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">No Past Expenses!</h3>
+            <p>You haven't submitted any expenses yet. Go to the Submit Expense tab to get started.</p>
+        </div>
+      """, unsafe_allow_html=True)
+
+  if st.session_state.active_page == "My Inbox":
+    st.markdown('<div class="section-title">My Inbox</div>', unsafe_allow_html=True)
+    inbox_messages = get_employee_inbox(st.session_state.email)
+    mark_inbox_read(st.session_state.email)
+    
+    if not inbox_messages:
+      st.markdown("""
+        <div style="text-align: center; padding: 4rem; color: #6b7280; background-color: #ffffff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 1rem;">
+            <div style="font-size: 3rem; margin-bottom: 1rem;">📭</div>
+            <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Empty</h3>
+            <p>You have no new notifications.</p>
+        </div>
+      """, unsafe_allow_html=True)
+    else:
+      for msg in inbox_messages:
+          msg_date = msg.get("date", "Unknown Date")
+          subject = msg.get("subject", "Notification")
+          body = msg.get("body", "")
+          with st.expander(f"**{_esc(subject)}**  |  *{_esc(msg_date)}*"):
+              st.markdown(body)
 
   if st.session_state.active_page == "My History":
     render_employee_expenses()
@@ -1964,100 +1978,130 @@ if st.session_state.role == "Employee":
 # ║ ADMIN DASHBOARD                     ║
 # ╚═══════════════════════════════════════════════════════════╝
 elif st.session_state.role == "Admin":
-  @st.fragment(run_every="5s")
+  @st.dialog("Receipt Preview")
+  def show_receipt_dialog(img_data):
+      st.image(img_data, use_container_width=True)
+
+  @st.dialog("Confirm Rejection")
+  def reject_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
+      st.warning("Are you sure you want to reject this expense?")
+      rejection_reason = st.text_input("Rejection Reason (required):", key=f"rej_reason_{item_db_id}")
+      if st.button("Confirm Reject", type="primary", key=f"confirm_reject_btn_{item_db_id}"):
+          if not rejection_reason.strip():
+              st.toast("A rejection reason is mandatory.")
+          else:
+              with st.spinner("Rejecting..."):
+                  payload = {
+                    "role": "tool",
+                    "parts": [{
+                      "function_response": {
+                        "id": item_interrupt_id,
+                        "name": "adk_request_input",
+                        "response": {"output": f"Reject: {rejection_reason}"}
+                      }
+                    }]
+                  }
+                  try:
+                    events = run_agent(payload, specific_session_id=item_session_id)
+                    process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
+                    delete_pending_approval(item_db_id)
+                    st.toast("Expense Rejected!")
+                    st.rerun()
+                  except Exception as e:
+                    if "Session not found" in str(e):
+                      st.toast("Session expired. Manually saving rejection.")
+                      fallback_exp = {
+                        "amount": float(item_details.get("amount", 0.0)),
+                        "submitter": item_submitter_str,
+                        "category": item_category,
+                        "description": item_details.get("description", "—") + f" [Comment: {rejection_reason}]",
+                        "date": item_date
+                      }
+                      save_expense(fallback_exp, "Rejected")
+                      delete_pending_approval(item_db_id)
+                      st.rerun()
+                    else:
+                      st.error(f"Error resuming workflow: {e}")
+
+  @st.dialog("Confirm Approval")
+  def approve_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
+      st.info("Are you sure you want to approve this expense?")
+      if st.button("Confirm Approve", type="primary", key=f"confirm_approve_btn_{item_db_id}"):
+          with st.spinner("Approving..."):
+              payload = {
+                "role": "tool",
+                "parts": [{
+                  "function_response": {
+                    "id": item_interrupt_id,
+                    "name": "adk_request_input",
+                    "response": {"output": "Approve"}
+                  }
+                }]
+              }
+              try:
+                events = run_agent(payload, specific_session_id=item_session_id)
+                process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
+                delete_pending_approval(item_db_id)
+                st.toast("Expense Approved!")
+                st.rerun()
+              except Exception as e:
+                if "Session not found" in str(e):
+                  st.toast("Session expired. Manually saving approval.")
+                  fallback_exp = {
+                    "amount": float(item_details.get("amount", 0.0)),
+                    "submitter": item_submitter_str,
+                    "category": item_category,
+                    "description": item_details.get("description", "—"),
+                    "date": item_date
+                  }
+                  save_expense(fallback_exp, "Approved")
+                  delete_pending_approval(item_db_id)
+                  st.rerun()
+                else:
+                  st.error(f"Error resuming workflow: {e}")
+
   def render_admin_dashboard():
     # ── All Expenses Table ───────────────────────────────────
     all_expenses = get_all_expenses()
     pending_records = get_all_pending_approvals()
     pending_count = len(pending_records)
     total_label = f"Pending Approval Requests ({pending_count})" if pending_count else "All Expenses"
+
+    if all_expenses:
+        import pandas as pd
+        df = pd.DataFrame(all_expenses)
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+        
+        approved_amt = df[df['status'] == 'Approved']['amount'].sum()
+        rejected_amt = df[df['status'] == 'Rejected']['amount'].sum()
+        
+        st.markdown('<div class="section-title">Dashboard Overview</div>', unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Approved", f"${approved_amt:,.2f}")
+        col2.metric("Total Rejected", f"${rejected_amt:,.2f}")
+        col3.metric("Pending Requests", pending_count)
+        
+        cat_df = df.groupby('category')['amount'].sum().reset_index()
+        if not cat_df.empty:
+            st.markdown('<div style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: #374151;">Expenses by Category</div>', unsafe_allow_html=True)
+            st.bar_chart(cat_df, x="category", y="amount", use_container_width=True)
+            
+        st.markdown("---")
   
     st.markdown(
-      f'<div class="section-title">{total_label}</div>',
+      f'<div class="section-title" id="pending_approvals">{total_label}</div>',
       unsafe_allow_html=True,
     )
+    
+    if st.session_state.get("admin_scroll") == "pending_approvals":
+        import streamlit.components.v1 as components
+        components.html(
+            "<script>window.parent.document.getElementById('pending_approvals').scrollIntoView({behavior: 'smooth'});</script>",
+            height=0
+        )
+        st.session_state.admin_scroll = None
   
-    @st.dialog("Receipt Preview")
-    def show_receipt_dialog(img_data):
-        st.image(img_data, use_container_width=True)
 
-    @st.dialog("Confirm Rejection")
-    def reject_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
-        st.warning("Are you sure you want to reject this expense?")
-        rejection_reason = st.text_input("Rejection Reason (required):", key=f"rej_reason_{item_db_id}")
-        if st.button("Confirm Reject", type="primary"):
-            if not rejection_reason.strip():
-                st.toast("A rejection reason is mandatory.", icon="⚠️")
-            else:
-                with st.spinner("Rejecting..."):
-                    payload = {
-                      "role": "tool",
-                      "parts": [{
-                        "function_response": {
-                          "id": item_interrupt_id,
-                          "name": "adk_request_input",
-                          "response": {"output": f"Reject: {rejection_reason}"}
-                        }
-                      }]
-                    }
-                    try:
-                      events = run_agent(payload, specific_session_id=item_session_id)
-                      process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
-                      delete_pending_approval(item_db_id)
-                      st.toast("Expense Rejected!", icon="❌")
-                      st.rerun()
-                    except Exception as e:
-                      if "Session not found" in str(e):
-                        st.toast("Session expired. Manually saving rejection.", icon="ℹ️")
-                        fallback_exp = {
-                          "amount": float(item_details.get("amount", 0.0)),
-                          "submitter": item_submitter_str,
-                          "category": item_category,
-                          "description": item_details.get("description", "—") + f" [Comment: {rejection_reason}]",
-                          "date": item_date
-                        }
-                        save_expense(fallback_exp, "Rejected")
-                        delete_pending_approval(item_db_id)
-                        st.rerun()
-                      else:
-                        st.error(f"Error resuming workflow: {e}")
-
-    @st.dialog("Confirm Approval")
-    def approve_dialog(item_db_id, item_interrupt_id, item_session_id, item_submitter_email, item_details, item_category, item_date, item_submitter_str):
-        st.info("Are you sure you want to approve this expense?")
-        if st.button("Confirm Approve", type="primary"):
-            with st.spinner("Approving..."):
-                payload = {
-                  "role": "tool",
-                  "parts": [{
-                    "function_response": {
-                      "id": item_interrupt_id,
-                      "name": "adk_request_input",
-                      "response": {"output": "Approve"}
-                    }
-                  }]
-                }
-                try:
-                  events = run_agent(payload, specific_session_id=item_session_id)
-                  process_events(events, run_session_id=item_session_id, submitter_email=item_submitter_email)
-                  delete_pending_approval(item_db_id)
-                  st.toast("Expense Approved!", icon="✅")
-                  st.rerun()
-                except Exception as e:
-                  if "Session not found" in str(e):
-                    st.toast("Session expired. Manually saving approval.", icon="ℹ️")
-                    fallback_exp = {
-                      "amount": float(item_details.get("amount", 0.0)),
-                      "submitter": item_submitter_str,
-                      "category": item_category,
-                      "description": item_details.get("description", "—"),
-                      "date": item_date
-                    }
-                    save_expense(fallback_exp, "Approved")
-                    delete_pending_approval(item_db_id)
-                    st.rerun()
-                  else:
-                    st.error(f"Error resuming workflow: {e}")
 
     # ── Pending expense detail card ──────────────────────────
     if pending_records:
@@ -2074,6 +2118,7 @@ elif st.session_state.role == "Admin":
         amount_str = details.get("amount", "0.00")
         description_str = details.get("description", "—")
         risk_str = details.get("risk", "N/A")
+        
         has_security = details.get("security_flag", False)
         has_injection = details.get("injection", False)
         pii_info = details.get("pii", "")
@@ -2083,6 +2128,16 @@ elif st.session_state.role == "Admin":
           exp_data = json.loads(raw_json_str)
         except Exception:
           exp_data = {}
+          
+        amount_display = f"${_esc(amount_str)}"
+        orig_amt = exp_data.get("original_amount")
+        orig_cur = exp_data.get("original_currency")
+        if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+            rate = exp_data.get("exchange_rate")
+            rate_str = f" <small style='color:gray;'>(Rate: 1 {_esc(str(orig_cur))} = ${_esc(str(rate))} USD)</small>" if rate else ""
+            original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}{rate_str}"
+        else:
+            original_display = "—"
           
         exp_date = exp_data.get("date", date.today().strftime('%d %b %Y'))
         exp_category = exp_data.get("category", "—")
@@ -2098,7 +2153,7 @@ elif st.session_state.role == "Admin":
           f"""<table class="expense-table">
   <thead><tr>
     <th>Expense ID</th><th>Employee</th><th>Date</th>
-    <th>Amount</th><th>Category</th><th>Status</th>
+    <th>Amount</th><th>Original</th><th>Category</th><th>Status</th>
   </tr></thead>
   <tbody>
   <tr class="row-selected">
@@ -2113,7 +2168,8 @@ elif st.session_state.role == "Admin":
       </div>
     </td>
     <td>{_esc(exp_date)}</td>
-    <td><strong>${_esc(amount_str)}</strong></td>
+    <td><strong>{amount_display}</strong></td>
+    <td>{original_display}</td>
     <td>{_esc(exp_category)}</td>
     <td><span class="status-badge status-awaiting">Awaiting Approval</span></td>
   </tr>
@@ -2125,7 +2181,7 @@ elif st.session_state.role == "Admin":
         # Security badges HTML
         flags_html = ""
         if has_security:
-          flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">⚠️ Security Event</span>'
+          flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">Warning: Security Event</span>'
         if has_injection:
           flags_html += '<span class="status-badge status-rejected" style="margin-right:0.4rem;">🚨 Prompt Injection</span>'
         if pii_info:
@@ -2144,7 +2200,7 @@ elif st.session_state.role == "Admin":
     <div class="detail-label">Date:</div>
     <div class="detail-value">{_esc(exp_date)}</div>
     <div class="detail-label">Amount:</div>
-    <div class="detail-value"><strong>${_esc(amount_str)}</strong></div>
+    <div class="detail-value"><strong>{amount_display}</strong></div>
     <div class="detail-label">Category:</div>
     <div class="detail-value">{_esc(exp_category)} (Threshold: ${threshold:.2f})</div>
     <div class="detail-label">Purpose:</div>
@@ -2164,7 +2220,7 @@ elif st.session_state.role == "Admin":
   
         # ── Receipt image preview ────────────────────────────
         if receipt_bytes:
-          if st.button("👁️ View Full Receipt", key=f"btn_view_{db_id}"):
+          if st.button("View Full Receipt", key=f"btn_view_{db_id}"):
             try:
               img_bytes = base64.b64decode(receipt_bytes)
               show_receipt_dialog(img_bytes)
@@ -2176,23 +2232,41 @@ elif st.session_state.role == "Admin":
         
         col1, col2 = st.columns(2)
         with col1:
-          if st.button("❌ Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
+          if st.button("Reject", use_container_width=True, key=f"btn_reject_{db_id}"):
             reject_dialog(db_id, interrupt_id, session_id, submitter_email, details, exp_category, exp_date, submitter_str)
         with col2:
-          if st.button("✅ Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
+          if st.button("Approve", type="primary", use_container_width=True, key=f"btn_approve_{db_id}"):
             approve_dialog(db_id, interrupt_id, session_id, submitter_email, details, exp_category, exp_date, submitter_str)
   
     else:
       # ── No pending — show last result + all expenses ─────
+      st.markdown("""<div style="text-align: center; padding: 3rem; color: #6b7280; background-color: #f9fafb; border-radius: 8px; border: 1px dashed #e5e7eb; margin-bottom: 2rem;">
+    <h3 style="margin-bottom: 0.5rem; color: #111827;">Inbox Zero!</h3>
+    <p>All expense requests have been processed.</p>
+</div>""", unsafe_allow_html=True)
+
       if st.session_state.final_output:
         out = st.session_state.final_output
         if isinstance(out, dict):
           exp = out.get("expense", {})
           decision = out.get("decision", "N/A")
           reason = out.get("reason", "")
+          email_mock = out.get("notification_email", "")
           status_cls = (
             "status-approved" if decision == "Approved" else ("status-auto-approved" if decision == "Auto-Approved" else "status-rejected")
           )
+          
+          email_html = ""
+            
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              rate = exp.get("exchange_rate")
+              rate_str = f" <small style='color:gray;'>(Rate: 1 {_esc(str(orig_cur))} = ${_esc(str(rate))} USD)</small>" if rate else ""
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}{rate_str}"
+          else:
+              original_display = "—"
+          
           st.markdown(
             f"""<div class="detail-card">
   <div class="detail-header">
@@ -2211,6 +2285,7 @@ elif st.session_state.role == "Admin":
     <div class="detail-label">Reason:</div>
     <div class="detail-value">{_esc(reason)}</div>
   </div>
+  {email_html}
 </div>""",
             unsafe_allow_html=True,
           )
@@ -2302,6 +2377,17 @@ elif st.session_state.role == "Admin":
           emp_name = _display_name(exp.get("submitter", ""))
           status = exp.get("status", "Approved")
           status_cls = "status-approved" if status == "Approved" else ("status-auto-approved" if status == "Auto-Approved" else ("status-rejected" if status == "Rejected" else "status-awaiting"))
+          
+          desc = exp.get('description','—')
+          amount_display = f"${exp.get('amount',0):.2f}"
+          
+          orig_amt = exp.get('original_amount')
+          orig_cur = exp.get('original_currency')
+          if orig_amt is not None and orig_cur and str(orig_cur).upper() != "USD":
+              original_display = f"{_esc(str(orig_amt))} {_esc(str(orig_cur))}"
+          else:
+              original_display = "—"
+              
           rows_html += f"""<tr>
             <td><strong>{_esc(exp_id)}</strong></td>
             <td>
@@ -2314,8 +2400,9 @@ elif st.session_state.role == "Admin":
             </td>
             <td>{_esc(exp.get('date','—'))}</td>
             <td>{_esc(exp.get('category','—'))}</td>
-            <td><strong>${exp.get('amount',0):.2f}</strong></td>
-            <td>{_esc(exp.get('description','—')[:40])}</td>
+            <td><strong>{amount_display}</strong></td>
+            <td>{original_display}</td>
+            <td>{_esc(desc[:40])}</td>
             <td><span class="status-badge {status_cls}">{_esc(status)}</span></td>
           </tr>"""
 
@@ -2327,6 +2414,7 @@ elif st.session_state.role == "Admin":
               <th>Date</th>
               <th>Category</th>
               <th>Amount</th>
+              <th>Original</th>
               <th>Description</th>
               <th>Status</th>
             </tr></thead>
